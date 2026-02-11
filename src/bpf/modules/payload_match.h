@@ -125,8 +125,9 @@ static __always_inline int check_payload_rule(struct xdp_md *ctx,
 
     __u8 *match_start = (__u8 *)data + total_offset;
 
-    /* Bounds check: ensure all pat_len bytes are within packet */
-    if ((__u8 *)match_start + pat_len > (__u8 *)data_end)
+    /* Bounds check: use constant size (16) so verifier can track range.
+     * PAYLOAD_PATTERN_MAX_LEN == 16 so this covers all byte accesses. */
+    if (match_start + 16 > (__u8 *)data_end)
         return -1;
 
     /* Also verify against declared payload length */
