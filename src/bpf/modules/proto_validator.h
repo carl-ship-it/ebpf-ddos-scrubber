@@ -52,15 +52,22 @@
  *    - Require opcode == QUERY (standard query, opcode 0)
  *    - Enforce RFC 1035 512-byte limit for non-EDNS queries
  * ===================================================================== */
-static __always_inline int dns_validate(struct packet_ctx *pkt,
+static __always_inline int dns_validate(struct xdp_md *ctx,
+                                        struct packet_ctx *pkt,
                                         struct global_stats *stats,
                                         __u32 dns_mode)
 {
-    void *data_end = pkt->data_end;
-    void *payload = pkt->payload;
+    /* Re-derive fresh payload pointer from ctx to satisfy BPF verifier.
+     * Stack-stored packet pointers lose their type on kernel 5.14. */
+    void *data = (void *)(long)ctx->data;
+    void *data_end = (void *)(long)ctx->data_end;
 
-    /* Bounds check: ensure dns_header fits within packet */
-    if (!payload)
+    __u16 pay_off = pkt->payload_offset;
+    if (!pay_off || pay_off > 1500)
+        return VERDICT_PASS;
+
+    void *payload = data + pay_off;
+    if (payload > data_end)
         return VERDICT_PASS;
 
     struct dns_header *dns = (struct dns_header *)payload;
@@ -147,13 +154,20 @@ static __always_inline int dns_validate(struct packet_ctx *pkt,
  *  - Block mode 6 (NTP_MODE_CONTROL) unless connection is established
  *  - Validate minimum packet size for mode 3 (client) / mode 4 (server)
  * ===================================================================== */
-static __always_inline int ntp_validate(struct packet_ctx *pkt,
+static __always_inline int ntp_validate(struct xdp_md *ctx,
+                                        struct packet_ctx *pkt,
                                         struct global_stats *stats)
 {
-    void *data_end = pkt->data_end;
-    void *payload = pkt->payload;
+    /* Re-derive fresh payload pointer from ctx to satisfy BPF verifier. */
+    void *data = (void *)(long)ctx->data;
+    void *data_end = (void *)(long)ctx->data_end;
 
-    if (!payload)
+    __u16 pay_off = pkt->payload_offset;
+    if (!pay_off || pay_off > 1500)
+        return VERDICT_PASS;
+
+    void *payload = data + pay_off;
+    if (payload > data_end)
         return VERDICT_PASS;
 
     struct ntp_header *ntp = (struct ntp_header *)payload;
@@ -235,13 +249,20 @@ static __always_inline int ntp_validate(struct packet_ctx *pkt,
  *  we should never receive M-SEARCH responses from the Internet.
  *  Response patterns start with "HTTP/1.1" or "NOTIFY".
  * ===================================================================== */
-static __always_inline int ssdp_validate(struct packet_ctx *pkt,
+static __always_inline int ssdp_validate(struct xdp_md *ctx,
+                                         struct packet_ctx *pkt,
                                          struct global_stats *stats)
 {
-    void *data_end = pkt->data_end;
-    void *payload = pkt->payload;
+    /* Re-derive fresh payload pointer from ctx to satisfy BPF verifier. */
+    void *data = (void *)(long)ctx->data;
+    void *data_end = (void *)(long)ctx->data_end;
 
-    if (!payload)
+    __u16 pay_off = pkt->payload_offset;
+    if (!pay_off || pay_off > 1500)
+        return VERDICT_PASS;
+
+    void *payload = data + pay_off;
+    if (payload > data_end)
         return VERDICT_PASS;
 
     /* Need at least 8 bytes to check response pattern signatures */
@@ -308,7 +329,8 @@ static __always_inline int memcached_validate(struct packet_ctx *pkt,
  *  At ESCALATION_HIGH or ESCALATION_CRITICAL: strict mode drops on
  *  first violation instead of allowing a tolerance window.
  * ===================================================================== */
-static __always_inline int tcp_state_validate(struct packet_ctx *pkt,
+static __always_inline int tcp_state_validate(struct xdp_md *ctx,
+                                              struct packet_ctx *pkt,
                                               struct global_stats *stats,
                                               __u64 now_ns)
 {
@@ -319,11 +341,18 @@ static __always_inline int tcp_state_validate(struct packet_ctx *pkt,
     if (pkt->ip_proto != IPPROTO_TCP)
         return VERDICT_PASS;
 
-    if (!pkt->tcp)
+    if (!pkt->l4_offset)
         return VERDICT_PASS;
 
-    /* Bounds-check TCP header access */
-    if ((void *)(pkt->tcp + 1) > pkt->data_end)
+    /* Re-derive fresh TCP pointer from ctx to satisfy BPF verifier.
+     * Clamp offset to reasonable max to prove bounded addition. */
+    void *data = (void *)(long)ctx->data;
+    void *data_end = (void *)(long)ctx->data_end;
+    __u16 l4_off = pkt->l4_offset;
+    if (l4_off > 1500)
+        return VERDICT_PASS;
+    struct tcphdr *tcp = (struct tcphdr *)(data + l4_off);
+    if ((void *)(tcp + 1) > data_end)
         return VERDICT_PASS;
 
     __u8 flags = pkt->tcp_flags;
@@ -462,7 +491,8 @@ static __always_inline int tcp_state_validate(struct packet_ctx *pkt,
  *    VERDICT_PASS - Packet passes all applicable protocol checks
  *    VERDICT_DROP - Protocol violation or amplification detected
  * ===================================================================== */
-static __always_inline int proto_validate(struct packet_ctx *pkt,
+static __always_inline int proto_validate(struct xdp_md *ctx,
+                                          struct packet_ctx *pkt,
                                           struct global_stats *stats,
                                           __u64 now_ns)
 {
@@ -472,7 +502,7 @@ static __always_inline int proto_validate(struct packet_ctx *pkt,
 
     /* ---- TCP state machine validation ---- */
     if (pkt->ip_proto == IPPROTO_TCP) {
-        int verdict = tcp_state_validate(pkt, stats, now_ns);
+        int verdict = tcp_state_validate(ctx, pkt, stats, now_ns);
         if (verdict == VERDICT_DROP)
             return VERDICT_DROP;
     }
@@ -481,28 +511,36 @@ static __always_inline int proto_validate(struct packet_ctx *pkt,
     if (pkt->ip_proto == IPPROTO_UDP) {
         __u16 dst_port = bpf_ntohs(pkt->dst_port);
 
-        /* Compute payload pointer: starts after UDP header */
-        void *payload = (void *)(pkt->udp + 1);
-        if ((void *)payload > pkt->data_end)
+        /* Re-derive fresh UDP payload pointer from ctx to satisfy BPF verifier.
+         * Use payload_offset which was already set by the parser. */
+        void *data = (void *)(long)ctx->data;
+        void *data_end = (void *)(long)ctx->data_end;
+
+        __u16 pay_off = pkt->payload_offset;
+        if (!pay_off || pay_off > 1500)
             return VERDICT_PASS;
 
-        /* Store payload pointer for sub-validators */
+        void *payload = data + pay_off;
+        if (payload > data_end)
+            return VERDICT_PASS;
+
+        /* Store fresh payload pointer for sub-validators */
         pkt->payload = payload;
 
         /* DNS (port 53) */
         if (dst_port == PROTO_PORT_DNS) {
             __u32 dns_mode = (__u32)get_config(CFG_DNS_VALID_MODE);
             if (dns_mode > 0)
-                return dns_validate(pkt, stats, dns_mode);
+                return dns_validate(ctx, pkt, stats, dns_mode);
         }
 
         /* NTP (port 123) */
         if (dst_port == PROTO_PORT_NTP)
-            return ntp_validate(pkt, stats);
+            return ntp_validate(ctx, pkt, stats);
 
         /* SSDP (port 1900) */
         if (dst_port == PROTO_PORT_SSDP)
-            return ssdp_validate(pkt, stats);
+            return ssdp_validate(ctx, pkt, stats);
 
         /* Memcached (port 11211) */
         if (dst_port == PROTO_PORT_MEMCACHED)
@@ -518,12 +556,12 @@ static __always_inline int proto_validate(struct packet_ctx *pkt,
             if (*proto_flags & (1 << 0)) {
                 __u32 dns_mode = (__u32)get_config(CFG_DNS_VALID_MODE);
                 if (dns_mode > 0)
-                    return dns_validate(pkt, stats, dns_mode);
+                    return dns_validate(ctx, pkt, stats, dns_mode);
             }
             if (*proto_flags & (1 << 1))
-                return ntp_validate(pkt, stats);
+                return ntp_validate(ctx, pkt, stats);
             if (*proto_flags & (1 << 2))
-                return ssdp_validate(pkt, stats);
+                return ssdp_validate(ctx, pkt, stats);
             if (*proto_flags & (1 << 3))
                 return memcached_validate(pkt, stats);
         }

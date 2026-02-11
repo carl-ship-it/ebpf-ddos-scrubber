@@ -185,6 +185,9 @@ struct packet_ctx {
     /* Offset from pkt->data to L4 payload start (for fresh pointer derivation) */
     __u16 payload_offset;
 
+    /* Offset from pkt->data to L4 header start (for fresh pointer derivation) */
+    __u16 l4_offset;
+
     /* First 4 bytes of L4 payload as uint32, for fingerprint hash */
     __u32 l4_payload_hash4;
 };

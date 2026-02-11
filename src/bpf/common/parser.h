@@ -32,6 +32,7 @@ static __always_inline int parse_packet(struct xdp_md *ctx,
     pkt->tcp_ack_seq = 0;
     pkt->l4_payload_hash4 = 0;
     pkt->payload_offset = 0;
+    pkt->l4_offset = 0;
     pkt->payload = NULL;
 
     /* ---- L2: Ethernet ---- */
@@ -95,6 +96,9 @@ static __always_inline int parse_packet(struct xdp_md *ctx,
     /* ---- L4 ---- */
     void *l4_hdr = (void *)iph + ip_hdr_len;
     __u16 l4_len = pkt->pkt_len > ip_hdr_len ? pkt->pkt_len - ip_hdr_len : 0;
+
+    /* Store L4 header offset from start of packet for fresh pointer derivation */
+    pkt->l4_offset = (__u16)((void *)l4_hdr - data);
 
     switch (iph->protocol) {
     case IPPROTO_TCP: {

@@ -88,7 +88,8 @@ static __always_inline int syn_cookie_validate(struct packet_ctx *pkt,
  *   VERDICT_TX   - SYN-ACK sent back (XDP_TX)
  *   VERDICT_DROP - Invalid ACK / failed cookie validation
  */
-static __always_inline int syn_flood_check(struct packet_ctx *pkt,
+static __always_inline int syn_flood_check(struct xdp_md *ctx,
+                                            struct packet_ctx *pkt,
                                             struct global_stats *stats,
                                             __u64 now_ns)
 {
@@ -115,12 +116,61 @@ static __always_inline int syn_flood_check(struct packet_ctx *pkt,
         __u8 mss_idx = mss_to_index(1460); /* Default MSS */
         __u32 cookie = syn_cookie_generate(pkt, sc->seed_current, mss_idx);
 
-        /* Bounds check for header modification */
-        struct ethhdr *eth = pkt->eth;
-        struct iphdr *iph = pkt->iph;
-        struct tcphdr *tcp = pkt->tcp;
+        /* Re-derive fresh pointers from ctx to satisfy BPF verifier.
+         * Stack-stored packet pointers lose their type on kernel 5.14,
+         * so we must rebuild them from ctx->data with bounded offsets. */
+        void *data = (void *)(long)ctx->data;
+        void *data_end = (void *)(long)ctx->data_end;
 
-        if ((void *)(tcp + 1) > pkt->data_end)
+        struct ethhdr *eth = data;
+        if ((void *)(eth + 1) > data_end)
+            return VERDICT_PASS;
+
+        /* Derive IP header: use l4_offset minus TCP position to find IP,
+         * but for simplicity, we know IP follows Ethernet (+ optional VLAN).
+         * The L4 offset is known; IP header starts at l4_offset - ihl*4.
+         * However the safest approach: recompute from Ethernet. */
+        __u16 l4_off = pkt->l4_offset;
+        if (l4_off < sizeof(struct ethhdr) || l4_off > 1500)
+            return VERDICT_PASS;
+
+        /* IP header starts at (l4_off - ip_hdr_len), but we stored l4_offset
+         * as the L4 start. Ethernet header is at offset 0. IP starts after
+         * Ethernet + optional VLAN. We can derive it: the IP header ends
+         * at l4_offset, so IP header starts at l4_offset - (iph->ihl * 4).
+         * But we need iph to read ihl, chicken-and-egg. Instead, use the
+         * fact that l3 = eth + 1 (+ VLAN offsets). Since we already parsed
+         * eth_proto and detected VLAN in parser, and l4_offset encodes
+         * the full L2+L3 header size, we know IP ends at l4_offset.
+         * For a basic non-VLAN case l3 starts at offset 14.
+         * The safest generic approach: IP header = data + (l4_off - ihl*4),
+         * but since we can't read ihl without a pointer, we'll scan from
+         * eth+1 considering VLAN. For robustness, compute l3_offset from
+         * the known l4_offset and the original ihl. We can read ihl from
+         * pkt->iph->ihl stored as scalar. Actually pkt->iph is a stale
+         * pointer. Let's just re-derive l3 from data and verify. */
+
+        /* Re-parse L3 start: skip Ethernet header */
+        void *l3_start = data + sizeof(struct ethhdr);
+        __u16 proto = eth->h_proto;
+
+        /* Handle up to 2 VLAN tags */
+        #pragma unroll
+        for (int i = 0; i < 2; i++) {
+            if (proto != bpf_htons(0x8100) && proto != bpf_htons(0x88A8))
+                break;
+            if ((void *)(l3_start + 4) > data_end)
+                return VERDICT_PASS;
+            proto = *(__be16 *)(l3_start + 2);
+            l3_start += 4;
+        }
+
+        struct iphdr *iph = l3_start;
+        if ((void *)(iph + 1) > data_end)
+            return VERDICT_PASS;
+
+        struct tcphdr *tcp = (struct tcphdr *)(data + l4_off);
+        if ((void *)(tcp + 1) > data_end)
             return VERDICT_PASS;
 
         /* Swap Ethernet addresses */
@@ -159,7 +209,7 @@ static __always_inline int syn_flood_check(struct packet_ctx *pkt,
         __u16 *p = (__u16 *)iph;
         #pragma unroll
         for (int i = 0; i < 10; i++) {
-            if ((void *)(p + 1) > pkt->data_end)
+            if ((void *)(p + 1) > data_end)
                 break;
             csum += *p;
             p++;

@@ -24,17 +24,41 @@
 /* Minimum acceptable first-fragment size (bytes) */
 #define FRAG_MIN_SIZE   68
 
-static __always_inline int fragment_check(struct packet_ctx *pkt,
+static __always_inline int fragment_check(struct xdp_md *ctx,
+                                           struct packet_ctx *pkt,
                                            struct global_stats *stats)
 {
     if (!pkt->is_fragment)
         return VERDICT_PASS;
 
-    struct iphdr *iph = pkt->iph;
-    if (!iph)
+    /* Re-derive fresh IP header pointer from ctx to satisfy BPF verifier.
+     * Stack-stored packet pointers lose their type on kernel 5.14. */
+    void *data = (void *)(long)ctx->data;
+    void *data_end = (void *)(long)ctx->data_end;
+
+    /* IP header is just before L4; compute l3 offset from l4_offset.
+     * For fragments, l4_offset might be 0 if parser couldn't determine L4.
+     * Fall back to re-parsing from Ethernet. */
+    struct ethhdr *eth = data;
+    if ((void *)(eth + 1) > data_end)
         return VERDICT_PASS;
 
-    if ((void *)(iph + 1) > pkt->data_end)
+    void *l3_start = data + sizeof(struct ethhdr);
+    __u16 proto = eth->h_proto;
+
+    /* Handle up to 2 VLAN tags */
+    #pragma unroll
+    for (int i = 0; i < 2; i++) {
+        if (proto != bpf_htons(0x8100) && proto != bpf_htons(0x88A8))
+            break;
+        if ((void *)(l3_start + 4) > data_end)
+            return VERDICT_PASS;
+        proto = *(__be16 *)(l3_start + 2);
+        l3_start += 4;
+    }
+
+    struct iphdr *iph = l3_start;
+    if ((void *)(iph + 1) > data_end)
         return VERDICT_PASS;
 
     __u16 frag_off = bpf_ntohs(iph->frag_off);

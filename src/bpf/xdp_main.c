@@ -99,7 +99,7 @@ int xdp_ddos_scrubber(struct xdp_md *ctx)
     }
 
     /* ---- Stage 6: Fragment detection ---- */
-    verdict = fragment_check(&pkt, stats);
+    verdict = fragment_check(ctx, &pkt, stats);
     if (verdict == VERDICT_DROP)
         return XDP_DROP;
 
@@ -116,14 +116,14 @@ int xdp_ddos_scrubber(struct xdp_md *ctx)
     }
 
     /* ---- Stage 9-10: Deep Protocol Validation + TCP State ---- */
-    verdict = proto_validate(&pkt, stats, now_ns);
+    verdict = proto_validate(ctx, &pkt, stats, now_ns);
     if (verdict == VERDICT_DROP) {
         stats_drop(stats, pkt.pkt_len);
         return XDP_DROP;
     }
 
     /* ---- Stage 11: SYN Flood (SYN Cookie) ---- */
-    verdict = syn_flood_check(&pkt, stats, now_ns);
+    verdict = syn_flood_check(ctx, &pkt, stats, now_ns);
     if (verdict == VERDICT_TX) {
         stats_tx(stats, pkt.pkt_len);
         return XDP_TX;
@@ -148,7 +148,7 @@ int xdp_ddos_scrubber(struct xdp_md *ctx)
     }
 
     /* ---- Stage 14: ICMP Flood ---- */
-    verdict = icmp_flood_check(&pkt, stats);
+    verdict = icmp_flood_check(ctx, &pkt, stats);
     if (verdict == VERDICT_DROP) {
         stats_drop(stats, pkt.pkt_len);
         return XDP_DROP;

@@ -27,17 +27,25 @@
 #define ICMP_ECHO_REQUEST        8
 #define ICMP_TIME_EXCEEDED      11
 
-static __always_inline int icmp_flood_check(struct packet_ctx *pkt,
+static __always_inline int icmp_flood_check(struct xdp_md *ctx,
+                                             struct packet_ctx *pkt,
                                              struct global_stats *stats)
 {
     if (pkt->ip_proto != IPPROTO_ICMP)
         return VERDICT_PASS;
 
-    if (!pkt->icmp)
+    if (!pkt->l4_offset)
         return VERDICT_PASS;
 
-    struct icmphdr *icmp = pkt->icmp;
-    if ((void *)(icmp + 1) > pkt->data_end)
+    /* Re-derive fresh ICMP pointer from ctx to satisfy BPF verifier.
+     * Clamp offset to reasonable max to prove bounded addition. */
+    void *data = (void *)(long)ctx->data;
+    void *data_end = (void *)(long)ctx->data_end;
+    __u16 off = pkt->l4_offset;
+    if (off > 1500)
+        return VERDICT_PASS;
+    struct icmphdr *icmp = (struct icmphdr *)(data + off);
+    if ((void *)(icmp + 1) > data_end)
         return VERDICT_PASS;
 
     __u8 type = icmp->type;
