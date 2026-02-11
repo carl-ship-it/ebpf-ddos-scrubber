@@ -182,6 +182,9 @@ struct packet_ctx {
     /* L7 payload pointer (after L4 header) */
     void *payload;
 
+    /* Offset from pkt->data to L4 payload start (for fresh pointer derivation) */
+    __u16 payload_offset;
+
     /* First 4 bytes of L4 payload as uint32, for fingerprint hash */
     __u32 l4_payload_hash4;
 };

@@ -109,7 +109,7 @@ int xdp_ddos_scrubber(struct xdp_md *ctx)
         return XDP_DROP;
 
     /* ---- Stage 8: Payload Pattern Matching ---- */
-    verdict = payload_match_check(&pkt, stats);
+    verdict = payload_match_check(ctx, &pkt, stats);
     if (verdict == VERDICT_DROP) {
         stats_drop(stats, pkt.pkt_len);
         return XDP_DROP;

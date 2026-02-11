@@ -31,6 +31,7 @@ static __always_inline int parse_packet(struct xdp_md *ctx,
     pkt->tcp_seq = 0;
     pkt->tcp_ack_seq = 0;
     pkt->l4_payload_hash4 = 0;
+    pkt->payload_offset = 0;
     pkt->payload = NULL;
 
     /* ---- L2: Ethernet ---- */
@@ -114,9 +115,10 @@ static __always_inline int parse_packet(struct xdp_md *ctx,
 
         pkt->l4_payload_len = l4_len > tcp_hdr_len ? l4_len - tcp_hdr_len : 0;
 
-        /* Set payload pointer and compute payload hash */
+        /* Set payload offset and compute payload hash */
         {
             void *p = (void *)tcp + tcp_hdr_len;
+            pkt->payload_offset = (__u16)(p - data);
             if (p + 4 <= data_end) {
                 pkt->payload = p;
                 pkt->l4_payload_hash4 = *(__u32 *)p;
@@ -136,9 +138,10 @@ static __always_inline int parse_packet(struct xdp_md *ctx,
         pkt->dst_port = udp->dest;
         pkt->l4_payload_len = l4_len > sizeof(*udp) ? l4_len - sizeof(*udp) : 0;
 
-        /* Set payload pointer and compute payload hash */
+        /* Set payload offset and compute payload hash */
         {
             void *p = (void *)(udp + 1);
+            pkt->payload_offset = (__u16)(p - data);
             if (p + 4 <= data_end) {
                 pkt->payload = p;
                 pkt->l4_payload_hash4 = *(__u32 *)p;
