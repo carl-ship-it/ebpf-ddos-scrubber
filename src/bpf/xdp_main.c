@@ -115,12 +115,18 @@ int xdp_ddos_scrubber(struct xdp_md *ctx)
         return XDP_DROP;
     }
 
-    /* ---- Stage 9-10: Deep Protocol Validation + TCP State ---- */
-    verdict = proto_validate(ctx, &pkt, stats, now_ns);
-    if (verdict == VERDICT_DROP) {
-        stats_drop(stats, pkt.pkt_len);
-        return XDP_DROP;
-    }
+    /* ---- Stage 9-10: Deep Protocol Validation + TCP State ----
+     * NOTE: Disabled on kernel 5.14 due to BPF verifier packet pointer
+     * range propagation limitations. The verifier loses verified range
+     * for packet pointers after stack spills. Re-enable when upgrading
+     * to kernel 5.17+ which has improved range tracking.
+     *
+     * verdict = proto_validate(ctx, &pkt, stats, now_ns);
+     * if (verdict == VERDICT_DROP) {
+     *     stats_drop(stats, pkt.pkt_len);
+     *     return XDP_DROP;
+     * }
+     */
 
     /* ---- Stage 11: SYN Flood (SYN Cookie) ---- */
     verdict = syn_flood_check(ctx, &pkt, stats, now_ns);
