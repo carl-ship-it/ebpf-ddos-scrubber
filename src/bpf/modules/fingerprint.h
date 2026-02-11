@@ -23,35 +23,10 @@
 /* Maximum signatures to check per packet */
 #define MAX_SIG_CHECK  8
 
-static __always_inline __u32 payload_hash_4bytes(struct packet_ctx *pkt)
-{
-    void *payload;
-
-    if (pkt->ip_proto == IPPROTO_TCP && pkt->tcp) {
-        /* Bounds check: ensure full TCP header is within packet */
-        if ((void *)(pkt->tcp + 1) > pkt->data_end)
-            return 0;
-        __u8 tcp_hdr_len = pkt->tcp->doff * 4;
-        if (tcp_hdr_len < 20)
-            return 0;
-        payload = (void *)pkt->tcp + tcp_hdr_len;
-    } else if (pkt->ip_proto == IPPROTO_UDP && pkt->udp) {
-        payload = (void *)(pkt->udp + 1);
-    } else {
-        return 0;
-    }
-
-    if (payload + 4 > pkt->data_end)
-        return 0;
-
-    return *(__u32 *)payload;
-}
-
 /* Single signature match check — inlined into unrolled macro calls */
 static __always_inline int sig_matches(struct attack_sig *sig,
                                         struct packet_ctx *pkt,
-                                        __u16 src_port_h, __u16 dst_port_h,
-                                        __u32 *phash, int *phash_computed)
+                                        __u16 src_port_h, __u16 dst_port_h)
 {
     /* Protocol match */
     if (sig->protocol != 0 && sig->protocol != pkt->ip_proto)
@@ -86,13 +61,9 @@ static __always_inline int sig_matches(struct attack_sig *sig,
             return 0;
     }
 
-    /* Payload hash (lazy compute) */
+    /* Payload hash (pre-computed in parser) */
     if (sig->payload_hash != 0) {
-        if (!*phash_computed) {
-            *phash = payload_hash_4bytes(pkt);
-            *phash_computed = 1;
-        }
-        if (*phash != sig->payload_hash)
+        if (pkt->l4_payload_hash4 != sig->payload_hash)
             return 0;
     }
 
@@ -104,8 +75,7 @@ static __always_inline int sig_matches(struct attack_sig *sig,
     if ((idx) < count) {                                                    \
         __u32 _k = (idx);                                                   \
         struct attack_sig *_sig = bpf_map_lookup_elem(&attack_sig_map, &_k);\
-        if (_sig && sig_matches(_sig, pkt, src_port_h, dst_port_h,          \
-                                &phash, &phash_computed)) {                 \
+        if (_sig && sig_matches(_sig, pkt, src_port_h, dst_port_h)) {       \
             if (stats) stats->acl_dropped++;                                \
             emit_event(pkt, ATTACK_NONE, 1, DROP_FINGERPRINT, 0, 0);       \
             return VERDICT_DROP;                                            \
@@ -127,8 +97,6 @@ static __always_inline int fingerprint_check(struct packet_ctx *pkt,
 
     __u16 src_port_h = bpf_ntohs(pkt->src_port);
     __u16 dst_port_h = bpf_ntohs(pkt->dst_port);
-    __u32 phash = 0;
-    int phash_computed = 0;
 
     /* Manually unrolled — no for-loop back-edge for the verifier */
     _CHECK_SIG(0);

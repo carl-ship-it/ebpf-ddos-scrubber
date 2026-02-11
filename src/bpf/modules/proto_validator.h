@@ -416,9 +416,8 @@ static __always_inline int tcp_state_validate(struct packet_ctx *pkt,
 
     /* ---- Sequence number window validation (basic) ---- */
     if (!violation && ct->state >= CT_STATE_ESTABLISHED &&
-        ct->seq_expected != 0 &&
-        (void *)(pkt->tcp + 1) <= pkt->data_end) {
-        __u32 seq = bpf_ntohl(pkt->tcp->seq);
+        ct->seq_expected != 0) {
+        __u32 seq = pkt->tcp_seq;
         __u32 expected = ct->seq_expected;
 
         /* Allow a window of +/- 2^30 around expected sequence number.

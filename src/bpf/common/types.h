@@ -174,8 +174,16 @@ struct packet_ctx {
     __u8  tcp_flags;       /* Extracted TCP flags */
     __u16 l4_payload_len;  /* Payload length after L4 header */
 
+    /* Pre-extracted TCP fields (avoids re-dereferencing pkt->tcp
+     * which loses packet pointer type in the BPF verifier) */
+    __u32 tcp_seq;         /* TCP seq in host byte order */
+    __u32 tcp_ack_seq;     /* TCP ack_seq in host byte order */
+
     /* L7 payload pointer (after L4 header) */
     void *payload;
+
+    /* First 4 bytes of L4 payload as uint32, for fingerprint hash */
+    __u32 l4_payload_hash4;
 };
 
 /* ===== Rate limiter entry (per-CPU) ===== */

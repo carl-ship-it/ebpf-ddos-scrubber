@@ -28,6 +28,10 @@ static __always_inline int parse_packet(struct xdp_md *ctx,
     pkt->dst_port = 0;
     pkt->l4_payload_len = 0;
     pkt->l4_hdr = NULL;
+    pkt->tcp_seq = 0;
+    pkt->tcp_ack_seq = 0;
+    pkt->l4_payload_hash4 = 0;
+    pkt->payload = NULL;
 
     /* ---- L2: Ethernet ---- */
     struct ethhdr *eth = data;
@@ -101,12 +105,25 @@ static __always_inline int parse_packet(struct xdp_md *ctx,
         pkt->src_port = tcp->source;
         pkt->dst_port = tcp->dest;
         pkt->tcp_flags = extract_tcp_flags(tcp);
+        pkt->tcp_seq = bpf_ntohl(tcp->seq);
+        pkt->tcp_ack_seq = bpf_ntohl(tcp->ack_seq);
 
         __u8 tcp_hdr_len = tcp->doff * 4;
         if (tcp_hdr_len < 20)
             return -1;
 
         pkt->l4_payload_len = l4_len > tcp_hdr_len ? l4_len - tcp_hdr_len : 0;
+
+        /* Set payload pointer and compute payload hash */
+        {
+            void *p = (void *)tcp + tcp_hdr_len;
+            if (p + 4 <= data_end) {
+                pkt->payload = p;
+                pkt->l4_payload_hash4 = *(__u32 *)p;
+            } else if (p < data_end) {
+                pkt->payload = p;
+            }
+        }
         break;
     }
     case IPPROTO_UDP: {
@@ -118,6 +135,17 @@ static __always_inline int parse_packet(struct xdp_md *ctx,
         pkt->src_port = udp->source;
         pkt->dst_port = udp->dest;
         pkt->l4_payload_len = l4_len > sizeof(*udp) ? l4_len - sizeof(*udp) : 0;
+
+        /* Set payload pointer and compute payload hash */
+        {
+            void *p = (void *)(udp + 1);
+            if (p + 4 <= data_end) {
+                pkt->payload = p;
+                pkt->l4_payload_hash4 = *(__u32 *)p;
+            } else if (p < data_end) {
+                pkt->payload = p;
+            }
+        }
         break;
     }
     case IPPROTO_ICMP: {
