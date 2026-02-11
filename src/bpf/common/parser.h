@@ -31,6 +31,8 @@ static __always_inline int parse_packet(struct xdp_md *ctx,
     pkt->tcp_seq = 0;
     pkt->tcp_ack_seq = 0;
     pkt->l4_payload_hash4 = 0;
+    pkt->icmp_type = 0;
+    pkt->icmp_code = 0;
     pkt->payload_offset = 0;
     pkt->l4_offset = 0;
     pkt->payload = NULL;
@@ -161,6 +163,8 @@ static __always_inline int parse_packet(struct xdp_md *ctx,
             return -1;
 
         pkt->icmp = icmp;
+        pkt->icmp_type = icmp->type;
+        pkt->icmp_code = icmp->code;
         /* ICMP doesn't have ports; use type/code as pseudo-port */
         pkt->src_port = 0;
         pkt->dst_port = bpf_htons(icmp->type);

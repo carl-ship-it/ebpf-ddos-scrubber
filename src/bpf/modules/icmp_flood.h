@@ -13,6 +13,8 @@
  * 2. Only allow Echo Request/Reply, Dest Unreachable, Time Exceeded
  * 3. Rate limit ICMP per source (handled by rate_limiter module)
  *
+ * Uses pre-extracted icmp_type from parser to avoid packet pointer issues.
+ *
  * Returns:
  *   VERDICT_PASS - Legitimate ICMP
  *   VERDICT_DROP - Suspicious ICMP
@@ -34,21 +36,8 @@ static __always_inline int icmp_flood_check(struct xdp_md *ctx,
     if (pkt->ip_proto != IPPROTO_ICMP)
         return VERDICT_PASS;
 
-    if (!pkt->l4_offset)
-        return VERDICT_PASS;
-
-    /* Re-derive fresh ICMP pointer from ctx to satisfy BPF verifier.
-     * Clamp offset to reasonable max to prove bounded addition. */
-    void *data = (void *)(long)ctx->data;
-    void *data_end = (void *)(long)ctx->data_end;
-    __u16 off = pkt->l4_offset;
-    if (off > 1500)
-        return VERDICT_PASS;
-    struct icmphdr *icmp = (struct icmphdr *)(data + off);
-    if ((void *)(icmp + 1) > data_end)
-        return VERDICT_PASS;
-
-    __u8 type = icmp->type;
+    /* Use pre-extracted type from parser (scalar, no packet pointer needed) */
+    __u8 type = pkt->icmp_type;
 
     /* ---- Size check: drop oversized ICMP ---- */
     if (pkt->l4_payload_len + sizeof(struct icmphdr) > ICMP_MAX_SIZE) {

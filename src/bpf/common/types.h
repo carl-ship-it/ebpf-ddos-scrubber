@@ -182,6 +182,10 @@ struct packet_ctx {
     /* L7 payload pointer (after L4 header) */
     void *payload;
 
+    /* Pre-extracted ICMP fields */
+    __u8  icmp_type;
+    __u8  icmp_code;
+
     /* Offset from pkt->data to L4 payload start (for fresh pointer derivation) */
     __u16 payload_offset;
 
