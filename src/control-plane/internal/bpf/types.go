@@ -192,8 +192,8 @@ func U32BEToIP(addr uint32) net.IP {
 func FormatEvent(e *Event) string {
 	srcIP := U32BEToIP(e.SrcIP)
 	dstIP := U32BEToIP(e.DstIP)
-	srcPort := binary.BigEndian.Uint16((*[2]byte)((*[2]byte)(&e.SrcPort))[:])
-	dstPort := binary.BigEndian.Uint16((*[2]byte)((*[2]byte)(&e.DstPort))[:])
+	srcPort := (e.SrcPort>>8) | (e.SrcPort<<8)
+	dstPort := (e.DstPort>>8) | (e.DstPort<<8)
 
 	action := "PASS"
 	if e.Action == 1 {
