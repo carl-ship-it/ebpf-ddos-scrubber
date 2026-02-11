@@ -17,32 +17,46 @@ const (
 
 // Attack type IDs (matching types.h)
 const (
-	AttackNone         = 0
-	AttackSYNFlood     = 1
-	AttackUDPFlood     = 2
-	AttackICMPFlood    = 3
-	AttackACKFlood     = 4
-	AttackDNSAmp       = 5
-	AttackNTPAmp       = 6
-	AttackSSDPAmp      = 7
-	AttackMemcachedAmp = 8
-	AttackFragment     = 9
-	AttackRSTFlood     = 10
+	AttackNone           = 0
+	AttackSYNFlood       = 1
+	AttackUDPFlood       = 2
+	AttackICMPFlood      = 3
+	AttackACKFlood       = 4
+	AttackDNSAmp         = 5
+	AttackNTPAmp         = 6
+	AttackSSDPAmp        = 7
+	AttackMemcachedAmp   = 8
+	AttackFragment       = 9
+	AttackRSTFlood       = 10
+	AttackGeoIPBlock     = 11
+	AttackReputation     = 12
+	AttackProtoViolation = 13
+	AttackPayloadMatch   = 14
+	AttackThreatIntel    = 15
 )
 
 // Drop reason codes (matching types.h)
 const (
-	DropBlacklist   = 1
-	DropRateLimit   = 2
-	DropSYNFlood    = 3
-	DropUDPFlood    = 4
-	DropICMPFlood   = 5
-	DropACKInvalid  = 6
-	DropDNSAmp      = 7
-	DropNTPAmp      = 8
-	DropFragment    = 9
-	DropParseError  = 10
-	DropFingerprint = 11
+	DropBlacklist      = 1
+	DropRateLimit      = 2
+	DropSYNFlood       = 3
+	DropUDPFlood       = 4
+	DropICMPFlood      = 5
+	DropACKInvalid     = 6
+	DropDNSAmp         = 7
+	DropNTPAmp         = 8
+	DropFragment       = 9
+	DropParseError     = 10
+	DropFingerprint    = 11
+	DropGeoIP          = 12
+	DropReputation     = 13
+	DropProtoInvalid   = 14
+	DropPayloadMatch   = 15
+	DropSSDPAmp        = 16
+	DropMemcachedAmp   = 17
+	DropTCPState       = 18
+	DropThreatIntel    = 19
+	DropEscalation     = 20
 )
 
 // Config keys (matching types.h CFG_* constants)
@@ -83,14 +97,16 @@ type ConntrackKey struct {
 
 // ConntrackEntry matches struct conntrack_entry in types.h.
 type ConntrackEntry struct {
-	LastSeenNS uint64
-	PacketsFwd uint32
-	PacketsRev uint32
-	BytesFwd   uint64
-	BytesRev   uint64
-	State      uint8
-	Flags      uint8
-	Pad        [6]uint8
+	LastSeenNS     uint64
+	PacketsFwd     uint32
+	PacketsRev     uint32
+	BytesFwd       uint64
+	BytesRev       uint64
+	State          uint8
+	Flags          uint8
+	TCPWindowScale uint8
+	ViolationCount uint8
+	SeqExpected    uint32
 }
 
 // GlobalStats matches struct global_stats in types.h (per-CPU).
@@ -115,21 +131,41 @@ type GlobalStats struct {
 	SYNCookiesSent       uint64
 	SYNCookiesValidated  uint64
 	SYNCookiesFailed     uint64
+	// Advanced counters
+	GeoIPDropped          uint64
+	ReputationDropped     uint64
+	ProtoViolationDropped uint64
+	PayloadMatchDropped   uint64
+	TCPStateDropped       uint64
+	SSDPAmpDropped        uint64
+	MemcachedAmpDropped   uint64
+	ThreatIntelDropped    uint64
+	ReputationAutoBlocked uint64
+	EscalationUpgrades    uint64
+	DNSQueriesValidated   uint64
+	DNSQueriesBlocked     uint64
+	NTPMonlistBlocked     uint64
+	TCPStateViolations    uint64
+	PortScanDetected      uint64
 }
 
 // Event matches struct event in types.h (ring buffer events).
 type Event struct {
-	TimestampNS uint64
-	SrcIP       uint32 // __be32
-	DstIP       uint32 // __be32
-	SrcPort     uint16 // __be16
-	DstPort     uint16 // __be16
-	Protocol    uint8
-	AttackType  uint8
-	Action      uint8
-	DropReason  uint8
-	PPSEstimate uint64
-	BPSEstimate uint64
+	TimestampNS     uint64
+	SrcIP           uint32 // __be32
+	DstIP           uint32 // __be32
+	SrcPort         uint16 // __be16
+	DstPort         uint16 // __be16
+	Protocol        uint8
+	AttackType      uint8
+	Action          uint8
+	DropReason      uint8
+	PPSEstimate     uint64
+	BPSEstimate     uint64
+	ReputationScore uint32
+	CountryCode     uint16
+	EscalationLevel uint8
+	Pad             uint8
 }
 
 // LPMKeyV4 matches struct lpm_key_v4 in types.h.
@@ -230,6 +266,16 @@ func AttackTypeName(t uint8) string {
 		return "fragment"
 	case AttackRSTFlood:
 		return "rst_flood"
+	case AttackGeoIPBlock:
+		return "geoip_block"
+	case AttackReputation:
+		return "reputation"
+	case AttackProtoViolation:
+		return "proto_violation"
+	case AttackPayloadMatch:
+		return "payload_match"
+	case AttackThreatIntel:
+		return "threat_intel"
 	default:
 		return fmt.Sprintf("unknown(%d)", t)
 	}
@@ -260,6 +306,24 @@ func DropReasonName(r uint8) string {
 		return "parse_error"
 	case DropFingerprint:
 		return "fingerprint"
+	case DropGeoIP:
+		return "geoip"
+	case DropReputation:
+		return "reputation"
+	case DropProtoInvalid:
+		return "proto_invalid"
+	case DropPayloadMatch:
+		return "payload_match"
+	case DropSSDPAmp:
+		return "ssdp_amp"
+	case DropMemcachedAmp:
+		return "memcached_amp"
+	case DropTCPState:
+		return "tcp_state"
+	case DropThreatIntel:
+		return "threat_intel"
+	case DropEscalation:
+		return "escalation"
 	default:
 		return fmt.Sprintf("unknown(%d)", r)
 	}
