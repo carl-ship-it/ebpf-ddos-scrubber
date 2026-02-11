@@ -194,6 +194,9 @@ static __always_inline int syn_flood_check(struct packet_ctx *pkt,
             return VERDICT_PASS;
 
         /* Validate SYN cookie */
+        /* Re-verify TCP header bounds (verifier loses track across stack) */
+        if ((void *)(pkt->tcp + 1) > pkt->data_end)
+            return VERDICT_DROP;
         __u32 ack_seq = bpf_ntohl(pkt->tcp->ack_seq);
         if (syn_cookie_validate(pkt, ack_seq)) {
             /* Valid cookie — create conntrack entry */
