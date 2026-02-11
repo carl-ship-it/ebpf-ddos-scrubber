@@ -1,20 +1,26 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * XDP DDoS Scrubber — Main Entry Point
+ * XDP DDoS Scrubber — Main Entry Point (v2: Advanced Defense)
  *
- * Processing pipeline:
- *   1. Parse packet (Ethernet → IPv4 → L4)
- *   2. Whitelist/Blacklist ACL check
- *   3. IP Fragment detection
- *   4. Attack signature fingerprint matching
- *   5. SYN Flood mitigation (SYN Cookie)
- *   6. ACK Flood detection (requires conntrack)
- *   7. UDP Flood & Amplification detection
- *   8. ICMP Flood mitigation
- *   9. Per-source rate limiting
- *  10. Global rate limiting
- *  11. Connection tracking update
- *  12. Statistics update → XDP_PASS
+ * 18-stage processing pipeline:
+ *   1.  Parse packet (Ethernet → IPv4 → L4 → Payload)
+ *   2.  Whitelist/Blacklist ACL check
+ *   3.  Threat intelligence feed check
+ *   4.  GeoIP country-based filtering
+ *   5.  IP Reputation score check
+ *   6.  IP Fragment detection
+ *   7.  Attack signature fingerprint matching
+ *   8.  Payload pattern matching
+ *   9.  Deep protocol validation (DNS/NTP/SSDP/Memcached)
+ *  10.  TCP state machine validation
+ *  11.  SYN Flood mitigation (SYN Cookie)
+ *  12.  ACK Flood detection (requires conntrack)
+ *  13.  UDP Flood & Amplification detection
+ *  14.  ICMP Flood mitigation
+ *  15.  Per-source rate limiting (adaptive)
+ *  16.  Global rate limiting
+ *  17.  Connection tracking update
+ *  18.  Statistics update → XDP_PASS
  */
 
 #include "common/types.h"
@@ -23,8 +29,13 @@
 #include "common/parser.h"
 
 #include "modules/acl.h"
+#include "modules/threat_intel.h"
+#include "modules/geoip.h"
+#include "modules/reputation.h"
 #include "modules/fragment.h"
 #include "modules/fingerprint.h"
+#include "modules/payload_match.h"
+#include "modules/proto_validator.h"
 #include "modules/syn_flood.h"
 #include "modules/ack_flood.h"
 #include "modules/udp_flood.h"
@@ -66,17 +77,52 @@ int xdp_ddos_scrubber(struct xdp_md *ctx)
     if (verdict == VERDICT_DROP)
         return XDP_DROP;
 
-    /* ---- Stage 3: Fragment detection ---- */
+    /* ---- Stage 3: Threat Intelligence Feed ---- */
+    verdict = threat_intel_check(&pkt, stats);
+    if (verdict == VERDICT_DROP) {
+        stats_drop(stats, pkt.pkt_len);
+        return XDP_DROP;
+    }
+
+    /* ---- Stage 4: GeoIP Country Filtering ---- */
+    verdict = geoip_check(&pkt, stats);
+    if (verdict == VERDICT_DROP) {
+        stats_drop(stats, pkt.pkt_len);
+        return XDP_DROP;
+    }
+
+    /* ---- Stage 5: IP Reputation Check ---- */
+    verdict = reputation_check(&pkt, stats, now_ns);
+    if (verdict == VERDICT_DROP) {
+        stats_drop(stats, pkt.pkt_len);
+        return XDP_DROP;
+    }
+
+    /* ---- Stage 6: Fragment detection ---- */
     verdict = fragment_check(&pkt, stats);
     if (verdict == VERDICT_DROP)
         return XDP_DROP;
 
-    /* ---- Stage 4: Attack signature fingerprint ---- */
+    /* ---- Stage 7: Attack signature fingerprint ---- */
     verdict = fingerprint_check(&pkt, stats);
     if (verdict == VERDICT_DROP)
         return XDP_DROP;
 
-    /* ---- Stage 5: SYN Flood (SYN Cookie) ---- */
+    /* ---- Stage 8: Payload Pattern Matching ---- */
+    verdict = payload_match_check(&pkt, stats);
+    if (verdict == VERDICT_DROP) {
+        stats_drop(stats, pkt.pkt_len);
+        return XDP_DROP;
+    }
+
+    /* ---- Stage 9-10: Deep Protocol Validation + TCP State ---- */
+    verdict = proto_validate(&pkt, stats, now_ns);
+    if (verdict == VERDICT_DROP) {
+        stats_drop(stats, pkt.pkt_len);
+        return XDP_DROP;
+    }
+
+    /* ---- Stage 11: SYN Flood (SYN Cookie) ---- */
     verdict = syn_flood_check(&pkt, stats, now_ns);
     if (verdict == VERDICT_TX) {
         stats_tx(stats, pkt.pkt_len);
@@ -87,45 +133,45 @@ int xdp_ddos_scrubber(struct xdp_md *ctx)
         return XDP_DROP;
     }
 
-    /* ---- Stage 6: ACK Flood ---- */
+    /* ---- Stage 12: ACK Flood ---- */
     verdict = ack_flood_check(&pkt, stats, now_ns);
     if (verdict == VERDICT_DROP) {
         stats_drop(stats, pkt.pkt_len);
         return XDP_DROP;
     }
 
-    /* ---- Stage 7: UDP Flood & Amplification ---- */
+    /* ---- Stage 13: UDP Flood & Amplification ---- */
     verdict = udp_flood_check(&pkt, stats, now_ns);
     if (verdict == VERDICT_DROP) {
         stats_drop(stats, pkt.pkt_len);
         return XDP_DROP;
     }
 
-    /* ---- Stage 8: ICMP Flood ---- */
+    /* ---- Stage 14: ICMP Flood ---- */
     verdict = icmp_flood_check(&pkt, stats);
     if (verdict == VERDICT_DROP) {
         stats_drop(stats, pkt.pkt_len);
         return XDP_DROP;
     }
 
-    /* ---- Stage 9: Per-Source Rate Limiting ---- */
+    /* ---- Stage 15: Per-Source Rate Limiting (Adaptive) ---- */
     verdict = rate_limit_check(&pkt, stats, now_ns);
     if (verdict == VERDICT_DROP) {
         stats_drop(stats, pkt.pkt_len);
         return XDP_DROP;
     }
 
-    /* ---- Stage 10: Global Rate Limiting ---- */
+    /* ---- Stage 16: Global Rate Limiting ---- */
     verdict = global_rate_check(&pkt, stats, now_ns);
     if (verdict == VERDICT_DROP) {
         stats_drop(stats, pkt.pkt_len);
         return XDP_DROP;
     }
 
-    /* ---- Stage 11: Connection Tracking ---- */
+    /* ---- Stage 17: Connection Tracking ---- */
     conntrack_update(&pkt, stats, now_ns);
 
-    /* ---- Stage 12: Pass ---- */
+    /* ---- Stage 18: Pass ---- */
     stats_tx(stats, pkt.pkt_len);
     return XDP_PASS;
 }

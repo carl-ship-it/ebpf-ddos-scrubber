@@ -146,4 +146,97 @@ struct {
     __type(value, __u32);
 } port_proto_map SEC(".maps");
 
+/* ================================================================
+ *                  NEW ADVANCED DEFENSE MAPS
+ * ================================================================ */
+
+/* ===== GeoIP Database (IPv4 CIDR → country + action) =====
+ * LPM trie mapping IP prefixes to country codes and actions.
+ * Populated by control plane from MaxMind GeoLite2 CSV.
+ */
+struct {
+    __uint(type, BPF_MAP_TYPE_LPM_TRIE);
+    __uint(max_entries, 500000);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+    __type(key, struct lpm_key_v4);
+    __type(value, struct geoip_entry);
+} geoip_map SEC(".maps");
+
+/* ===== GeoIP Country Policy =====
+ * Hash map: country_code(u16) → action(u8).
+ * Control plane sets per-country policy.
+ */
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 512);
+    __type(key, __u16);
+    __type(value, __u8);
+} geoip_policy SEC(".maps");
+
+/* ===== IP Reputation Tracking =====
+ * LRU hash keyed by source IP for dynamic reputation scoring.
+ * Entries created on first seen, score increases on violations.
+ */
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_PERCPU_HASH);
+    __uint(max_entries, 2000000);
+    __type(key, __be32);
+    __type(value, struct ip_reputation);
+} reputation_map SEC(".maps");
+
+/* ===== Payload Match Rules =====
+ * Array of configurable payload pattern matching rules.
+ * Control plane manages rules via gRPC API.
+ */
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, PAYLOAD_MATCH_MAX_RULES);
+    __type(key, __u32);
+    __type(value, struct payload_rule);
+} payload_rules SEC(".maps");
+
+/* ===== Payload Rule Count =====
+ * Single-entry array holding count of active payload rules.
+ */
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u32);
+} payload_rule_count SEC(".maps");
+
+/* ===== Threat Intelligence Feed =====
+ * LPM trie mapping known-bad IPs from external feeds.
+ * Populated by control plane from Spamhaus, AbuseIPDB, etc.
+ */
+struct {
+    __uint(type, BPF_MAP_TYPE_LPM_TRIE);
+    __uint(max_entries, 500000);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+    __type(key, struct lpm_key_v4);
+    __type(value, struct threat_intel_entry);
+} threat_intel_map SEC(".maps");
+
+/* ===== Port Scan Detection =====
+ * LRU hash keyed by source IP, tracking distinct ports accessed.
+ */
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_PERCPU_HASH);
+    __uint(max_entries, 500000);
+    __type(key, __be32);
+    __type(value, struct port_scan_entry);
+} port_scan_map SEC(".maps");
+
+/* ===== Adaptive Rate Limit Overrides =====
+ * Hash map: source IP → per-IP override rate (set by anomaly detector).
+ * If entry exists, overrides default rate_limit_map rate.
+ * Value: pps limit (0 = use default).
+ */
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 100000);
+    __type(key, __be32);
+    __type(value, __u64);
+} adaptive_rate_map SEC(".maps");
+
 #endif /* __MAPS_H__ */

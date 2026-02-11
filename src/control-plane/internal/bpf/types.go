@@ -58,6 +58,16 @@ const (
 	CfgBaselinePPS      = 8
 	CfgBaselineBPS      = 9
 	CfgAttackThreshold  = 10
+	CfgGeoIPEnable      = 11
+	CfgReputationEnable = 12
+	CfgReputationThresh = 13
+	CfgProtoValidEnable = 14
+	CfgPayloadMatchEn   = 15
+	CfgEscalationLevel  = 16
+	CfgThreatIntelEn    = 17
+	CfgDNSValidMode     = 18
+	CfgTCPStateEnable   = 19
+	CfgAdaptiveRate     = 20
 	CfgMax              = 64
 )
 

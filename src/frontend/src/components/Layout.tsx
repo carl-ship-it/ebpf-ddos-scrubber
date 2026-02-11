@@ -7,6 +7,14 @@ import {
   UnorderedListOutlined,
   SettingOutlined,
   ApiOutlined,
+  GlobalOutlined,
+  UserSwitchOutlined,
+  AlertOutlined,
+  LineChartOutlined,
+  BugOutlined,
+  CloudServerOutlined,
+  ApartmentOutlined,
+  ScanOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { useStore } from '../store';
@@ -16,10 +24,38 @@ const { Text } = Typography;
 
 const menuItems = [
   { key: '/', icon: <DashboardOutlined />, label: 'Dashboard' },
-  { key: '/acl', icon: <SafetyCertificateOutlined />, label: 'ACL' },
-  { key: '/rate-limit', icon: <ThunderboltOutlined />, label: 'Rate Limit' },
+  {
+    key: 'defense',
+    icon: <SafetyCertificateOutlined />,
+    label: 'Defense',
+    children: [
+      { key: '/acl', icon: <SafetyCertificateOutlined />, label: 'ACL' },
+      { key: '/rate-limit', icon: <ThunderboltOutlined />, label: 'Rate Limit' },
+      { key: '/geoip', icon: <GlobalOutlined />, label: 'GeoIP' },
+      { key: '/reputation', icon: <UserSwitchOutlined />, label: 'IP Reputation' },
+      { key: '/signatures', icon: <ScanOutlined />, label: 'Signatures' },
+      { key: '/proto-validation', icon: <ApiOutlined />, label: 'Protocol Check' },
+    ],
+  },
+  {
+    key: 'intelligence',
+    icon: <BugOutlined />,
+    label: 'Intelligence',
+    children: [
+      { key: '/threat-intel', icon: <BugOutlined />, label: 'Threat Feeds' },
+      { key: '/baseline', icon: <LineChartOutlined />, label: 'Baseline' },
+      { key: '/escalation', icon: <AlertOutlined />, label: 'Escalation' },
+    ],
+  },
+  {
+    key: 'network',
+    icon: <CloudServerOutlined />,
+    label: 'Network',
+    children: [
+      { key: '/bgp', icon: <ApartmentOutlined />, label: 'BGP / RTBH' },
+    ],
+  },
   { key: '/events', icon: <UnorderedListOutlined />, label: 'Events' },
-  { key: '/signatures', icon: <ApiOutlined />, label: 'Signatures' },
   { key: '/settings', icon: <SettingOutlined />, label: 'Settings' },
 ];
 
@@ -65,8 +101,13 @@ const AppLayout: React.FC = () => {
           theme="dark"
           mode="inline"
           selectedKeys={[location.pathname]}
+          defaultOpenKeys={collapsed ? [] : ['defense', 'intelligence', 'network']}
           items={menuItems}
-          onClick={({ key }) => navigate(key)}
+          onClick={({ key }) => {
+            if (!['defense', 'intelligence', 'network'].includes(key)) {
+              navigate(key);
+            }
+          }}
           style={{ borderRight: 0 }}
         />
       </Sider>
@@ -94,6 +135,7 @@ const AppLayout: React.FC = () => {
             {status && (
               <Text style={{ color: 'rgba(255,255,255,0.45)', marginLeft: 16 }}>
                 {status.interfaceName} | {status.xdpMode} | v{status.version}
+                {status.pipelineStages && ` | ${status.pipelineStages} stages`}
               </Text>
             )}
           </Space>

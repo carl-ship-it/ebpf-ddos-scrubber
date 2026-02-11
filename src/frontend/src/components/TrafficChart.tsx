@@ -19,7 +19,6 @@ const TrafficChart: React.FC<Props> = ({ mode }) => {
 
     const isPPS = mode === 'pps';
     const title = isPPS ? 'Traffic (PPS)' : 'Traffic (BPS)';
-    const unit = isPPS ? ' pps' : ' bps';
 
     const rxData = history.map((s) => (isPPS ? s.rxPps : s.rxBps));
     const txData = history.map((s) => (isPPS ? s.txPps : s.txBps));

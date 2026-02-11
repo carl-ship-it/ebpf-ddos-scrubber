@@ -34,6 +34,49 @@ service ScrubberService {
 
   // Events
   rpc StreamEvents(StreamEventsRequest) returns (stream EventMessage);
+
+  // === NEW: GeoIP ===
+  rpc SetGeoIPPolicy(GeoIPPolicyRequest) returns (GeoIPPolicyResponse);
+  rpc GetGeoIPPolicy(GetGeoIPPolicyRequest) returns (GeoIPPolicyResponse);
+  rpc GetGeoIPStats(GetGeoIPStatsRequest) returns (GeoIPStatsResponse);
+
+  // === NEW: IP Reputation ===
+  rpc GetTopOffenders(GetTopOffendersRequest) returns (TopOffendersResponse);
+  rpc GetReputationConfig(GetReputationConfigRequest) returns (ReputationConfig);
+  rpc SetReputationConfig(ReputationConfig) returns (SetReputationConfigResponse);
+  rpc ManualBlockIP(ManualBlockRequest) returns (ManualBlockResponse);
+  rpc ManualUnblockIP(ManualBlockRequest) returns (ManualBlockResponse);
+
+  // === NEW: Escalation ===
+  rpc GetEscalationStatus(GetEscalationRequest) returns (EscalationStatusResponse);
+  rpc GetEscalationHistory(GetEscalationHistoryRequest) returns (EscalationHistoryResponse);
+  rpc SetEscalationLevel(SetEscalationLevelRequest) returns (SetEscalationLevelResponse);
+
+  // === NEW: Traffic Baseline / Anomaly Detection ===
+  rpc GetBaseline(GetBaselineRequest) returns (BaselineResponse);
+  rpc GetAdaptiveRates(GetAdaptiveRatesRequest) returns (AdaptiveRatesResponse);
+
+  // === NEW: Threat Intelligence ===
+  rpc GetThreatFeeds(GetThreatFeedsRequest) returns (ThreatFeedsResponse);
+  rpc AddThreatFeed(AddThreatFeedRequest) returns (ThreatFeedResponse);
+  rpc RemoveThreatFeed(RemoveThreatFeedRequest) returns (ThreatFeedResponse);
+  rpc SyncThreatFeeds(SyncThreatFeedsRequest) returns (ThreatFeedResponse);
+  rpc GetThreatIntelStats(GetThreatIntelStatsRequest) returns (ThreatIntelStatsResponse);
+
+  // === NEW: BGP / RTBH ===
+  rpc GetBGPStatus(GetBGPStatusRequest) returns (BGPStatusResponse);
+  rpc AnnounceBlackhole(BGPBlackholeRequest) returns (BGPActionResponse);
+  rpc WithdrawBlackhole(BGPBlackholeRequest) returns (BGPActionResponse);
+  rpc GetActiveFlowspec(GetActiveFlowspecRequest) returns (FlowspecListResponse);
+
+  // === NEW: Payload Rules ===
+  rpc GetPayloadRules(GetPayloadRulesRequest) returns (PayloadRulesResponse);
+  rpc AddPayloadRule(PayloadRuleRequest) returns (PayloadRuleResponse);
+  rpc RemovePayloadRule(RemovePayloadRuleRequest) returns (PayloadRuleResponse);
+
+  // === NEW: Protocol Validation ===
+  rpc GetProtoValidationConfig(GetProtoValidConfigRequest) returns (ProtoValidConfig);
+  rpc SetProtoValidationConfig(ProtoValidConfig) returns (SetProtoValidConfigResponse);
 }
 
 // ===== Status =====
@@ -46,6 +89,8 @@ message GetStatusResponse {
   uint32 program_id = 4;
   uint64 uptime_seconds = 5;
   string version = 6;
+  uint32 escalation_level = 7;
+  uint32 pipeline_stages = 8;
 }
 
 message SetEnabledRequest {
@@ -64,7 +109,7 @@ message GetStatsResponse {
 }
 
 message StreamStatsRequest {
-  uint32 interval_ms = 1; // Stats push interval (default 1000)
+  uint32 interval_ms = 1;
 }
 
 message StatsSnapshot {
@@ -98,19 +143,35 @@ message StatsSnapshot {
   uint64 syn_cookies_validated = 36;
   uint64 syn_cookies_failed = 37;
 
+  // === New advanced counters ===
+  uint64 geoip_dropped = 40;
+  uint64 reputation_dropped = 41;
+  uint64 proto_violation_dropped = 42;
+  uint64 payload_match_dropped = 43;
+  uint64 tcp_state_dropped = 44;
+  uint64 ssdp_amp_dropped = 45;
+  uint64 memcached_amp_dropped = 46;
+  uint64 threat_intel_dropped = 47;
+  uint64 reputation_auto_blocked = 48;
+  uint64 dns_queries_validated = 49;
+  uint64 dns_queries_blocked = 50;
+  uint64 ntp_monlist_blocked = 51;
+  uint64 tcp_state_violations = 52;
+  uint64 port_scan_detected = 53;
+
   // Rates (computed)
-  double rx_pps = 50;
-  double rx_bps = 51;
-  double tx_pps = 52;
-  double tx_bps = 53;
-  double drop_pps = 54;
-  double drop_bps = 55;
+  double rx_pps = 60;
+  double rx_bps = 61;
+  double tx_pps = 62;
+  double tx_bps = 63;
+  double drop_pps = 64;
+  double drop_bps = 65;
 }
 
 // ===== ACL =====
 message ACLRequest {
-  string cidr = 1;   // e.g. "10.0.0.0/8" or "192.168.1.1"
-  uint32 reason = 2; // Drop reason code (for blacklist)
+  string cidr = 1;
+  uint32 reason = 2;
 }
 
 message ACLResponse {
@@ -127,6 +188,7 @@ message RateConfig {
   uint64 icmp_rate_pps = 3;
   uint64 global_pps_limit = 4;
   uint64 global_bps_limit = 5;
+  bool adaptive_enabled = 6;
 }
 
 message SetRateConfigResponse {
@@ -174,9 +236,8 @@ message ClearSignaturesResponse {
 
 // ===== Events =====
 message StreamEventsRequest {
-  // Filters (all optional, empty = all events)
   repeated uint32 attack_types = 1;
-  repeated uint32 actions = 2; // 0=pass, 1=drop
+  repeated uint32 actions = 2;
 }
 
 message EventMessage {
@@ -191,4 +252,286 @@ message EventMessage {
   string drop_reason = 9;
   uint64 pps_estimate = 10;
   uint64 bps_estimate = 11;
+  uint32 reputation_score = 12;
+  string country_code = 13;
+  uint32 escalation_level = 14;
+}
+
+// ===== GeoIP =====
+message GeoIPPolicyRequest {
+  map<string, uint32> country_actions = 1; // country_code → action (0=pass, 1=drop, 2=rate_limit, 3=monitor)
+}
+
+message GetGeoIPPolicyRequest {}
+
+message GeoIPPolicyResponse {
+  map<string, uint32> country_actions = 1;
+  bool enabled = 2;
+  uint32 total_entries = 3;
+}
+
+message GetGeoIPStatsRequest {}
+
+message GeoIPCountryStats {
+  string country = 1;
+  uint64 dropped = 2;
+  uint64 rate_limited = 3;
+  uint64 monitored = 4;
+  uint64 total_packets = 5;
+}
+
+message GeoIPStatsResponse {
+  repeated GeoIPCountryStats countries = 1;
+  uint64 total_geoip_drops = 2;
+}
+
+// ===== IP Reputation =====
+message GetTopOffendersRequest {
+  uint32 limit = 1;
+}
+
+message IPReputationEntry {
+  string ip = 1;
+  uint32 score = 2;
+  uint32 total_packets = 3;
+  uint32 dropped_packets = 4;
+  uint32 violation_count = 5;
+  bool blocked = 6;
+  uint64 first_seen_ns = 7;
+  uint64 last_seen_ns = 8;
+}
+
+message TopOffendersResponse {
+  repeated IPReputationEntry entries = 1;
+  uint32 total_tracked = 2;
+  uint32 total_blocked = 3;
+}
+
+message GetReputationConfigRequest {}
+
+message ReputationConfig {
+  bool enabled = 1;
+  uint32 block_threshold = 2;
+  uint32 decay_rate = 3;
+  bool auto_block = 4;
+  bool port_scan_detection = 5;
+}
+
+message SetReputationConfigResponse {
+  bool success = 1;
+}
+
+message ManualBlockRequest {
+  string ip = 1;
+  string reason = 2;
+}
+
+message ManualBlockResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// ===== Escalation =====
+message GetEscalationRequest {}
+
+message EscalationTrigger {
+  string name = 1;
+  double current_value = 2;
+  double threshold = 3;
+  bool active = 4;
+}
+
+message EscalationStatusResponse {
+  uint32 current_level = 1;
+  string level_name = 2;
+  repeated EscalationTrigger triggers = 3;
+  uint64 level_since_ns = 4;
+  uint64 total_escalations = 5;
+}
+
+message GetEscalationHistoryRequest {
+  uint32 limit = 1;
+}
+
+message EscalationEvent {
+  uint64 timestamp_ns = 1;
+  uint32 from_level = 2;
+  uint32 to_level = 3;
+  string reason = 4;
+  repeated EscalationTrigger triggers = 5;
+}
+
+message EscalationHistoryResponse {
+  repeated EscalationEvent events = 1;
+}
+
+message SetEscalationLevelRequest {
+  uint32 level = 1; // Manual override (0-3)
+}
+
+message SetEscalationLevelResponse {
+  bool success = 1;
+  uint32 previous_level = 2;
+}
+
+// ===== Traffic Baseline =====
+message GetBaselineRequest {}
+
+message BaselineResponse {
+  double baseline_pps = 1;
+  double baseline_bps = 2;
+  double current_pps = 3;
+  double current_bps = 4;
+  double std_dev_pps = 5;
+  double std_dev_bps = 6;
+  double z_score_pps = 7;
+  double z_score_bps = 8;
+  bool is_anomaly = 9;
+  double anomaly_score = 10;
+  bool learning_complete = 11;
+  uint32 samples_collected = 12;
+}
+
+message GetAdaptiveRatesRequest {}
+
+message AdaptiveRatesResponse {
+  uint64 syn_pps = 1;
+  uint64 udp_pps = 2;
+  uint64 icmp_pps = 3;
+  uint64 global_pps = 4;
+  bool adaptive_active = 5;
+}
+
+// ===== Threat Intelligence =====
+message GetThreatFeedsRequest {}
+
+message ThreatFeed {
+  string name = 1;
+  string url = 2;
+  string feed_type = 3; // plaintext, csv, json
+  bool enabled = 4;
+  uint64 last_sync_ns = 5;
+  uint32 entry_count = 6;
+  string error = 7;
+}
+
+message ThreatFeedsResponse {
+  repeated ThreatFeed feeds = 1;
+  uint32 total_entries = 2;
+}
+
+message AddThreatFeedRequest {
+  string name = 1;
+  string url = 2;
+  string feed_type = 3;
+}
+
+message RemoveThreatFeedRequest {
+  string name = 1;
+}
+
+message ThreatFeedResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message SyncThreatFeedsRequest {}
+
+message GetThreatIntelStatsRequest {}
+
+message ThreatIntelStatsResponse {
+  uint32 total_entries = 1;
+  uint64 total_drops = 2;
+  uint64 total_rate_limited = 3;
+  uint64 total_monitored = 4;
+  map<string, uint32> entries_by_source = 5;
+}
+
+// ===== BGP / RTBH =====
+message GetBGPStatusRequest {}
+
+message BGPStatusResponse {
+  bool connected = 1;
+  string router_ip = 2;
+  uint32 local_as = 3;
+  uint32 peer_as = 4;
+  string session_state = 5;
+  uint32 active_blackholes = 6;
+  uint32 active_flowspec = 7;
+}
+
+message BGPBlackholeRequest {
+  string prefix = 1;
+  string reason = 2;
+}
+
+message BGPActionResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message GetActiveFlowspecRequest {}
+
+message FlowspecRule {
+  string src_prefix = 1;
+  string dst_prefix = 2;
+  string protocol = 3;
+  string src_port = 4;
+  string dst_port = 5;
+  string action = 6;
+  uint64 created_ns = 7;
+}
+
+message FlowspecListResponse {
+  repeated FlowspecRule rules = 1;
+}
+
+// ===== Payload Rules =====
+message GetPayloadRulesRequest {}
+
+message PayloadRule {
+  uint32 rule_id = 1;
+  bytes pattern = 2;
+  bytes mask = 3;
+  uint32 pattern_len = 4;
+  uint32 offset = 5;
+  uint32 protocol = 6; // 0=any, 6=tcp, 17=udp
+  uint32 action = 7;   // 0=drop, 1=rate-limit, 2=monitor
+  uint32 dst_port = 8;
+  uint64 hit_count = 9;
+  string description = 10;
+}
+
+message PayloadRulesResponse {
+  repeated PayloadRule rules = 1;
+  uint32 total_hits = 2;
+}
+
+message PayloadRuleRequest {
+  PayloadRule rule = 1;
+}
+
+message RemovePayloadRuleRequest {
+  uint32 rule_id = 1;
+}
+
+message PayloadRuleResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// ===== Protocol Validation =====
+message GetProtoValidConfigRequest {}
+
+message ProtoValidConfig {
+  bool enabled = 1;
+  uint32 dns_mode = 2;     // 0=off, 1=basic, 2=strict
+  bool tcp_state_check = 3;
+  bool ntp_monlist_block = 4;
+  bool ssdp_block = 5;
+  bool memcached_block = 6;
+}
+
+message SetProtoValidConfigResponse {
+  bool success = 1;
 }

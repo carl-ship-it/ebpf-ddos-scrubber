@@ -12,9 +12,7 @@ import {
   Tag,
 } from 'antd';
 import {
-  PoweroffOutlined,
   ClearOutlined,
-  ReloadOutlined,
 } from '@ant-design/icons';
 import * as api from '../api/client';
 import { useStore } from '../store';
