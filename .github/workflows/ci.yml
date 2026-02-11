@@ -1,0 +1,172 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  GO_VERSION: "1.22"
+  NODE_VERSION: "20"
+
+jobs:
+  # ===== BPF Compilation =====
+  build-bpf:
+    name: Build BPF
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install BPF toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang-18 llvm-18 libbpf-dev linux-headers-$(uname -r) make
+          sudo ln -sf /usr/bin/clang-18 /usr/bin/clang
+          sudo ln -sf /usr/bin/llc-18 /usr/bin/llc
+          sudo ln -sf /usr/bin/llvm-strip-18 /usr/bin/llvm-strip
+
+      - name: Compile XDP program
+        run: make all
+
+      - name: Verify BPF object
+        run: |
+          file build/obj/xdp_ddos_scrubber.o
+          llvm-readelf-18 -S build/obj/xdp_ddos_scrubber.o | head -20
+
+      - name: Upload BPF artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bpf-object
+          path: build/obj/xdp_ddos_scrubber.o
+          retention-days: 7
+
+  # ===== Go Control Plane =====
+  build-go:
+    name: Build & Test Go
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: src/control-plane
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: src/control-plane/go.sum
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: |
+          CGO_ENABLED=0 go build \
+            -ldflags "-s -w -X main.version=ci-${{ github.sha }}" \
+            -o ../../build/ddos-scrubber \
+            ./cmd/scrubber
+
+      - name: Test
+        run: go test -v -race -coverprofile=coverage.out ./...
+
+      - name: Upload Go binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-binary
+          path: build/ddos-scrubber
+          retention-days: 7
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-coverage
+          path: src/control-plane/coverage.out
+          retention-days: 7
+
+  # ===== Go Lint =====
+  lint-go:
+    name: Lint Go
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: src/control-plane
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          working-directory: src/control-plane
+
+  # ===== Frontend =====
+  build-frontend:
+    name: Build & Lint Frontend
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: src/frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: src/frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts 2>/dev/null || npm install
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Build
+        run: npm run build
+
+      - name: Upload frontend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: build/frontend
+          retention-days: 7
+
+  # ===== Docker Build =====
+  docker:
+    name: Docker Build
+    runs-on: ubuntu-24.04
+    needs: [build-bpf, build-go, build-frontend]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build control-plane image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile.control-plane
+          push: false
+          tags: ddos-scrubber/control-plane:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile.frontend
+          push: false
+          tags: ddos-scrubber/frontend:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -1,0 +1,122 @@
+# DDoS Scrubber — Full Stack Docker Compose
+#
+# Usage:
+#   docker compose build
+#   docker compose up -d
+#
+# IMPORTANT: The control-plane container requires privileged mode
+# and host network access for XDP program loading.
+
+services:
+  # ---- Control Plane (Go + BPF) ----
+  control-plane:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.control-plane
+      args:
+        VERSION: ${VERSION:-dev}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+    container_name: ddos-scrubber-cp
+    restart: unless-stopped
+    privileged: true
+    network_mode: host
+    cap_add:
+      - SYS_ADMIN
+      - NET_ADMIN
+      - BPF
+      - PERFMON
+    volumes:
+      - ./configs/config.yaml:/etc/ddos-scrubber/config.yaml:ro
+      - /sys/fs/bpf:/sys/fs/bpf
+      - /proc:/host/proc:ro
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    healthcheck:
+      test: ["CMD", "sh", "-c", "ss -tlnp | grep -q 9090"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ---- Frontend (React + Nginx) ----
+  frontend:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.frontend
+    container_name: ddos-scrubber-ui
+    restart: unless-stopped
+    ports:
+      - "${UI_PORT:-8080}:80"
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  # ---- VictoriaMetrics (Time-Series DB) ----
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:v1.103.0
+    container_name: ddos-scrubber-tsdb
+    restart: unless-stopped
+    ports:
+      - "${TSDB_PORT:-8428}:8428"
+    volumes:
+      - vm_data:/storage
+    command:
+      - "--storageDataPath=/storage"
+      - "--retentionPeriod=30d"
+      - "--httpListenAddr=:8428"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8428/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  # ---- Redis (Cache + Pub/Sub) ----
+  redis:
+    image: redis:7-alpine
+    container_name: ddos-scrubber-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # ---- Grafana (Optional monitoring) ----
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: ddos-scrubber-grafana
+    restart: unless-stopped
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASS:-scrubber}
+      - GF_INSTALL_PLUGINS=
+    depends_on:
+      - victoriametrics
+    profiles:
+      - monitoring
+
+volumes:
+  vm_data:
+    driver: local
+  redis_data:
+    driver: local
+  grafana_data:
+    driver: local

@@ -1,0 +1,209 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  GO_VERSION: "1.22"
+  NODE_VERSION: "20"
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository }}
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  # ===== Build all artifacts =====
+  build:
+    name: Build Release
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      # ---- BPF ----
+      - name: Install BPF toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang-18 llvm-18 libbpf-dev linux-headers-$(uname -r) make
+          sudo ln -sf /usr/bin/clang-18 /usr/bin/clang
+          sudo ln -sf /usr/bin/llc-18 /usr/bin/llc
+          sudo ln -sf /usr/bin/llvm-strip-18 /usr/bin/llvm-strip
+
+      - name: Build BPF
+        run: make all
+
+      # ---- Go ----
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Build Go (linux/amd64)
+        working-directory: src/control-plane
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -ldflags "-s -w -X main.version=${{ steps.version.outputs.VERSION }} -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o ../../build/ddos-scrubber-linux-amd64 \
+            ./cmd/scrubber
+
+      - name: Build Go (linux/arm64)
+        working-directory: src/control-plane
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build \
+            -ldflags "-s -w -X main.version=${{ steps.version.outputs.VERSION }} -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o ../../build/ddos-scrubber-linux-arm64 \
+            ./cmd/scrubber
+
+      # ---- Frontend ----
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Build Frontend
+        working-directory: src/frontend
+        run: |
+          npm ci --ignore-scripts 2>/dev/null || npm install
+          npm run build
+
+      # ---- Package ----
+      - name: Create release tarball
+        run: |
+          VERSION=${{ steps.version.outputs.VERSION }}
+          mkdir -p release
+
+          # amd64 bundle
+          tar czf "release/ddos-scrubber-${VERSION}-linux-amd64.tar.gz" \
+            -C build obj/xdp_ddos_scrubber.o ddos-scrubber-linux-amd64 frontend/ \
+            -C .. configs/config.yaml deploy/systemd/ deploy/scripts/
+
+          # arm64 bundle
+          tar czf "release/ddos-scrubber-${VERSION}-linux-arm64.tar.gz" \
+            -C build obj/xdp_ddos_scrubber.o ddos-scrubber-linux-arm64 frontend/ \
+            -C .. configs/config.yaml deploy/systemd/ deploy/scripts/
+
+          # BPF object only
+          cp build/obj/xdp_ddos_scrubber.o "release/xdp_ddos_scrubber-${VERSION}.o"
+
+          ls -lh release/
+
+      - name: Generate checksums
+        run: |
+          cd release
+          sha256sum * > SHA256SUMS
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: release/
+
+  # ===== Push Docker Images =====
+  docker:
+    name: Publish Docker Images
+    runs-on: ubuntu-24.04
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta (control-plane)
+        id: meta-cp
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/control-plane
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+
+      - name: Build & push control-plane
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile.control-plane
+          push: true
+          tags: ${{ steps.meta-cp.outputs.tags }}
+          labels: ${{ steps.meta-cp.outputs.labels }}
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            BUILD_TIME=${{ github.event.head_commit.timestamp }}
+
+      - name: Docker meta (frontend)
+        id: meta-fe
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/frontend
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+
+      - name: Build & push frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile.frontend
+          push: true
+          tags: ${{ steps.meta-fe.outputs.tags }}
+          labels: ${{ steps.meta-fe.outputs.labels }}
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ===== GitHub Release =====
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-24.04
+    needs: [build, docker]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+          path: release/
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            echo "## Changes since $PREV_TAG" > CHANGELOG.md
+            git log --pretty=format:"- %s (%h)" "$PREV_TAG"..HEAD >> CHANGELOG.md
+          else
+            echo "## Initial Release" > CHANGELOG.md
+            echo "- First release of DDoS Scrubber" >> CHANGELOG.md
+          fi
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: CHANGELOG.md
+          files: release/*
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

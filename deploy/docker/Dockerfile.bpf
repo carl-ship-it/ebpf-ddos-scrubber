@@ -1,0 +1,26 @@
+# Stage: Compile BPF object from C source
+# Produces: /out/xdp_ddos_scrubber.o
+
+FROM ubuntu:24.04 AS bpf-builder
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    clang-18 \
+    llvm-18 \
+    libbpf-dev \
+    linux-headers-generic \
+    make \
+    && ln -s /usr/bin/clang-18 /usr/bin/clang \
+    && ln -s /usr/bin/llc-18 /usr/bin/llc \
+    && ln -s /usr/bin/llvm-strip-18 /usr/bin/llvm-strip \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY src/bpf/ src/bpf/
+COPY Makefile .
+
+RUN make all
+
+FROM scratch AS export
+COPY --from=bpf-builder /build/build/obj/xdp_ddos_scrubber.o /xdp_ddos_scrubber.o

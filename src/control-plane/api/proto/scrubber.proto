@@ -1,0 +1,194 @@
+syntax = "proto3";
+
+package scrubber.v1;
+
+option go_package = "github.com/ebpf-ddos-scrubber/control-plane/api/proto";
+
+// ===== Scrubber Control Service =====
+service ScrubberService {
+  // Status
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+  rpc SetEnabled(SetEnabledRequest) returns (SetEnabledResponse);
+
+  // Statistics
+  rpc GetStats(GetStatsRequest) returns (GetStatsResponse);
+  rpc StreamStats(StreamStatsRequest) returns (stream StatsSnapshot);
+
+  // ACL Management
+  rpc AddBlacklist(ACLRequest) returns (ACLResponse);
+  rpc RemoveBlacklist(ACLRequest) returns (ACLResponse);
+  rpc AddWhitelist(ACLRequest) returns (ACLResponse);
+  rpc RemoveWhitelist(ACLRequest) returns (ACLResponse);
+
+  // Rate Limit Configuration
+  rpc GetRateConfig(GetRateConfigRequest) returns (RateConfig);
+  rpc SetRateConfig(RateConfig) returns (SetRateConfigResponse);
+
+  // Connection Tracking
+  rpc GetConntrackInfo(GetConntrackInfoRequest) returns (ConntrackInfo);
+  rpc FlushConntrack(FlushConntrackRequest) returns (FlushConntrackResponse);
+
+  // Attack Signatures
+  rpc SetAttackSignature(AttackSignature) returns (SetSignatureResponse);
+  rpc ClearAttackSignatures(ClearSignaturesRequest) returns (ClearSignaturesResponse);
+
+  // Events
+  rpc StreamEvents(StreamEventsRequest) returns (stream EventMessage);
+}
+
+// ===== Status =====
+message GetStatusRequest {}
+
+message GetStatusResponse {
+  bool enabled = 1;
+  string interface_name = 2;
+  string xdp_mode = 3;
+  uint32 program_id = 4;
+  uint64 uptime_seconds = 5;
+  string version = 6;
+}
+
+message SetEnabledRequest {
+  bool enabled = 1;
+}
+
+message SetEnabledResponse {
+  bool success = 1;
+}
+
+// ===== Statistics =====
+message GetStatsRequest {}
+
+message GetStatsResponse {
+  StatsSnapshot snapshot = 1;
+}
+
+message StreamStatsRequest {
+  uint32 interval_ms = 1; // Stats push interval (default 1000)
+}
+
+message StatsSnapshot {
+  uint64 timestamp_ns = 1;
+
+  // Counters
+  uint64 rx_packets = 10;
+  uint64 rx_bytes = 11;
+  uint64 tx_packets = 12;
+  uint64 tx_bytes = 13;
+  uint64 dropped_packets = 14;
+  uint64 dropped_bytes = 15;
+
+  // Per-attack counters
+  uint64 syn_flood_dropped = 20;
+  uint64 udp_flood_dropped = 21;
+  uint64 icmp_flood_dropped = 22;
+  uint64 ack_flood_dropped = 23;
+  uint64 dns_amp_dropped = 24;
+  uint64 ntp_amp_dropped = 25;
+  uint64 fragment_dropped = 26;
+  uint64 acl_dropped = 27;
+  uint64 rate_limited = 28;
+
+  // Conntrack
+  uint64 conntrack_new = 30;
+  uint64 conntrack_established = 31;
+
+  // SYN Cookie
+  uint64 syn_cookies_sent = 35;
+  uint64 syn_cookies_validated = 36;
+  uint64 syn_cookies_failed = 37;
+
+  // Rates (computed)
+  double rx_pps = 50;
+  double rx_bps = 51;
+  double tx_pps = 52;
+  double tx_bps = 53;
+  double drop_pps = 54;
+  double drop_bps = 55;
+}
+
+// ===== ACL =====
+message ACLRequest {
+  string cidr = 1;   // e.g. "10.0.0.0/8" or "192.168.1.1"
+  uint32 reason = 2; // Drop reason code (for blacklist)
+}
+
+message ACLResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// ===== Rate Limit =====
+message GetRateConfigRequest {}
+
+message RateConfig {
+  uint64 syn_rate_pps = 1;
+  uint64 udp_rate_pps = 2;
+  uint64 icmp_rate_pps = 3;
+  uint64 global_pps_limit = 4;
+  uint64 global_bps_limit = 5;
+}
+
+message SetRateConfigResponse {
+  bool success = 1;
+}
+
+// ===== Conntrack =====
+message GetConntrackInfoRequest {}
+
+message ConntrackInfo {
+  uint64 active_connections = 1;
+  bool enabled = 2;
+}
+
+message FlushConntrackRequest {}
+
+message FlushConntrackResponse {
+  uint64 entries_removed = 1;
+}
+
+// ===== Attack Signatures =====
+message AttackSignature {
+  uint32 index = 1;
+  uint32 protocol = 2;
+  uint32 flags_mask = 3;
+  uint32 flags_match = 4;
+  uint32 src_port_min = 5;
+  uint32 src_port_max = 6;
+  uint32 dst_port_min = 7;
+  uint32 dst_port_max = 8;
+  uint32 pkt_len_min = 9;
+  uint32 pkt_len_max = 10;
+  uint32 payload_hash = 11;
+}
+
+message SetSignatureResponse {
+  bool success = 1;
+}
+
+message ClearSignaturesRequest {}
+
+message ClearSignaturesResponse {
+  uint32 cleared = 1;
+}
+
+// ===== Events =====
+message StreamEventsRequest {
+  // Filters (all optional, empty = all events)
+  repeated uint32 attack_types = 1;
+  repeated uint32 actions = 2; // 0=pass, 1=drop
+}
+
+message EventMessage {
+  uint64 timestamp_ns = 1;
+  string src_ip = 2;
+  string dst_ip = 3;
+  uint32 src_port = 4;
+  uint32 dst_port = 5;
+  uint32 protocol = 6;
+  string attack_type = 7;
+  string action = 8;
+  string drop_reason = 9;
+  uint64 pps_estimate = 10;
+  uint64 bps_estimate = 11;
+}

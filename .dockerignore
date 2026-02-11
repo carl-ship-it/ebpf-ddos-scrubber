@@ -1,0 +1,12 @@
+build/
+node_modules/
+.git/
+.github/
+*.md
+!PROJECT_PLAN.md
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

@@ -1,0 +1,68 @@
+# DDoS Scrubber Configuration
+# =========================
+
+# Network interface to attach XDP program
+interface: eth0
+
+# XDP attach mode: native (best perf), skb (compatible), offload (NIC offload)
+xdp_mode: native
+
+# Path to compiled BPF object file
+bpf_object: build/obj/xdp_ddos_scrubber.o
+
+# Log level: debug, info, warn, error
+log_level: info
+
+# Scrubber engine settings
+scrubber:
+  enabled: true
+  conntrack_enabled: true
+  baseline_pps: 100000        # Learned baseline PPS
+  baseline_bps: 1000000000    # Learned baseline BPS (1 Gbps)
+  attack_threshold: 300       # Attack detection = 3x baseline
+
+# gRPC API server
+api:
+  listen: "0.0.0.0:9090"
+  tls: false
+  # cert: /etc/ddos-scrubber/tls/server.crt
+  # key: /etc/ddos-scrubber/tls/server.key
+
+# SYN Cookie settings
+syn_cookie:
+  enabled: true
+  seed_rotation_sec: 60       # Rotate cookie seeds every 60s
+
+# Rate limiting
+rate_limit:
+  syn_rate_pps: 1000          # Max SYN packets/sec per source IP
+  udp_rate_pps: 10000         # Max UDP packets/sec per source IP
+  icmp_rate_pps: 100          # Max ICMP packets/sec per source IP
+  global_pps: 0               # Global PPS limit (0 = disabled)
+  global_bps: 0               # Global BPS limit (0 = disabled)
+
+# IP Blacklist (CIDR notation)
+blacklist: []
+  # - "10.0.0.0/8"
+  # - "192.168.100.0/24"
+
+# IP Whitelist (CIDR notation) — bypass all checks
+whitelist: []
+  # - "172.16.0.0/12"
+
+# Amplification-sensitive ports
+amp_ports:
+  - port: 53
+    flags: 1     # DNS
+  - port: 123
+    flags: 2     # NTP
+  - port: 1900
+    flags: 4     # SSDP
+  - port: 11211
+    flags: 8     # Memcached
+  - port: 19
+    flags: 16    # Chargen
+  - port: 389
+    flags: 32    # CLDAP
+  - port: 161
+    flags: 64    # SNMP

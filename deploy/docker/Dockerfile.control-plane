@@ -1,0 +1,62 @@
+# Multi-stage build for the Go control plane binary.
+# Final image is distroless for minimal attack surface.
+
+# ---- Stage 1: Build BPF object ----
+FROM ubuntu:24.04 AS bpf-builder
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    clang-18 llvm-18 libbpf-dev linux-headers-generic make \
+    && ln -s /usr/bin/clang-18 /usr/bin/clang \
+    && ln -s /usr/bin/llc-18 /usr/bin/llc \
+    && ln -s /usr/bin/llvm-strip-18 /usr/bin/llvm-strip \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY src/bpf/ src/bpf/
+COPY Makefile .
+RUN make all
+
+# ---- Stage 2: Build Go binary ----
+FROM golang:1.22-bookworm AS go-builder
+
+WORKDIR /build/src/control-plane
+
+COPY src/control-plane/go.mod src/control-plane/go.sum* ./
+RUN go mod download 2>/dev/null || true
+
+COPY src/control-plane/ .
+
+ARG VERSION=dev
+ARG BUILD_TIME=unknown
+
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags "-s -w -X main.version=${VERSION} -X main.buildTime=${BUILD_TIME}" \
+    -o /out/ddos-scrubber \
+    ./cmd/scrubber
+
+# ---- Stage 3: Final image ----
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libbpf1 \
+    iproute2 \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -r -s /bin/false scrubber
+
+WORKDIR /opt/ddos-scrubber
+
+COPY --from=bpf-builder /build/build/obj/xdp_ddos_scrubber.o /opt/ddos-scrubber/bpf/
+COPY --from=go-builder /out/ddos-scrubber /opt/ddos-scrubber/bin/
+COPY configs/config.yaml /etc/ddos-scrubber/config.yaml
+
+# The control plane needs CAP_SYS_ADMIN + CAP_NET_ADMIN to load BPF programs.
+# Run with: --cap-add SYS_ADMIN --cap-add NET_ADMIN --privileged
+
+EXPOSE 9090
+
+ENTRYPOINT ["/opt/ddos-scrubber/bin/ddos-scrubber"]
+CMD ["-config", "/etc/ddos-scrubber/config.yaml"]

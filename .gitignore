@@ -1,0 +1,28 @@
+# Build artifacts
+build/
+*.o
+
+# Go
+src/control-plane/vendor/
+
+# Node
+src/frontend/node_modules/
+src/frontend/dist/
+
+# Environment
+.env
+*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Protobuf generated
+src/control-plane/api/gen/

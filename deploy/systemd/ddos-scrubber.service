@@ -1,0 +1,41 @@
+[Unit]
+Description=DDoS Scrubber - XDP-based L3/L4 Traffic Scrubbing Engine
+Documentation=https://github.com/ebpf-ddos-scrubber
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+ExecStartPre=/opt/ddos-scrubber/bin/ddos-scrubber -version
+ExecStart=/opt/ddos-scrubber/bin/ddos-scrubber \
+    -config /etc/ddos-scrubber/config.yaml
+
+Restart=on-failure
+RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+# Security hardening (still need caps for BPF)
+AmbientCapabilities=CAP_SYS_ADMIN CAP_NET_ADMIN CAP_BPF CAP_PERFMON
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_NET_ADMIN CAP_BPF CAP_PERFMON
+LockPersonality=yes
+NoNewPrivileges=no
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+RestrictRealtime=yes
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ddos-scrubber
+
+# Resource limits
+LimitNOFILE=65536
+LimitMEMLOCK=infinity
+
+[Install]
+WantedBy=multi-user.target
