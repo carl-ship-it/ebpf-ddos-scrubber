@@ -23,10 +23,10 @@ static __always_inline int acl_check(struct packet_ctx *pkt,
         .addr = pkt->src_ip,
     };
 
-    /* Whitelist check first — always takes priority */
+    /* Whitelist check first — bypass entire pipeline */
     __u32 *wl = bpf_map_lookup_elem(&whitelist_v4, &key);
     if (wl)
-        return VERDICT_PASS;
+        return VERDICT_BYPASS;
 
     /* Blacklist check */
     __u32 *bl = bpf_map_lookup_elem(&blacklist_v4, &key);

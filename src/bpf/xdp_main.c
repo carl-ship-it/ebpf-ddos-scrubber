@@ -76,6 +76,11 @@ int xdp_ddos_scrubber(struct xdp_md *ctx)
     verdict = acl_check(&pkt, stats);
     if (verdict == VERDICT_DROP)
         return XDP_DROP;
+    if (verdict == VERDICT_BYPASS) {
+        /* Whitelisted source — skip all checks */
+        stats_tx(stats, pkt.pkt_len);
+        return XDP_PASS;
+    }
 
     /* ---- Stage 3: Threat Intelligence Feed ---- */
     verdict = threat_intel_check(&pkt, stats);

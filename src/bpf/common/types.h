@@ -18,6 +18,7 @@
 #define VERDICT_DROP   1
 #define VERDICT_TX     2  /* XDP_TX: send back out same interface */
 #define VERDICT_REDIR  3  /* XDP_REDIRECT: forward to another interface */
+#define VERDICT_BYPASS 4  /* Whitelisted — skip all checks, XDP_PASS */
 
 /* ===== Protocol numbers ===== */
 #define PROTO_TCP   IPPROTO_TCP

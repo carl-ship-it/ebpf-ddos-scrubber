@@ -45,7 +45,7 @@ func (e *Engine) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	e.cancel = cancel
 
-	// Step 1: Load BPF program
+	// Step 1: Load BPF program (maps are created but XDP is NOT yet attached)
 	e.log.Info("=== Starting DDoS Scrubber Engine ===")
 
 	e.loader = bpf.NewLoader(e.log, e.cfg.BPFObject)
@@ -53,20 +53,22 @@ func (e *Engine) Start(ctx context.Context) error {
 		return fmt.Errorf("loading BPF program: %w", err)
 	}
 
-	// Step 2: Attach to interface
+	// Step 2: Initialize map manager
+	e.maps = bpf.NewMapManager(e.log, e.loader.Objects())
+
+	// Step 3: Apply initial configuration to BPF maps BEFORE attaching XDP.
+	// This ensures whitelist, rate limits, and other settings are in place
+	// before the program starts processing packets — preventing lockout.
+	if err := e.applyConfig(); err != nil {
+		e.loader.Close()
+		return fmt.Errorf("applying config: %w", err)
+	}
+
+	// Step 4: NOW attach to interface (safe — maps are populated)
 	flags := xdpFlags(e.cfg.XDPMode)
 	if err := e.loader.Attach(e.cfg.Interface, flags); err != nil {
 		e.loader.Close()
 		return fmt.Errorf("attaching XDP: %w", err)
-	}
-
-	// Step 3: Initialize map manager
-	e.maps = bpf.NewMapManager(e.log, e.loader.Objects())
-
-	// Step 4: Apply initial configuration to BPF maps
-	if err := e.applyConfig(); err != nil {
-		e.loader.Close()
-		return fmt.Errorf("applying config: %w", err)
 	}
 
 	// Step 5: Start stats collector
