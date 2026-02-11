@@ -28,7 +28,12 @@ static __always_inline __u32 payload_hash_4bytes(struct packet_ctx *pkt)
     void *payload;
 
     if (pkt->ip_proto == IPPROTO_TCP && pkt->tcp) {
+        /* Bounds check: ensure full TCP header is within packet */
+        if ((void *)(pkt->tcp + 1) > pkt->data_end)
+            return 0;
         __u8 tcp_hdr_len = pkt->tcp->doff * 4;
+        if (tcp_hdr_len < 20)
+            return 0;
         payload = (void *)pkt->tcp + tcp_hdr_len;
     } else if (pkt->ip_proto == IPPROTO_UDP && pkt->udp) {
         payload = (void *)(pkt->udp + 1);
