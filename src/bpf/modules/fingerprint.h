@@ -12,22 +12,19 @@
  * Each signature specifies protocol, TCP flags, port ranges, size ranges,
  * and optional payload hash.
  *
- * Signatures are populated via control plane from:
- * - Threat intelligence feeds
- * - Auto-detected attack patterns
- * - Manual operator rules
+ * Uses manual unrolling (macro) to avoid BPF verifier "infinite loop"
+ * rejection on kernel 5.14 where #pragma unroll fails for complex bodies.
  *
  * Returns:
  *   VERDICT_PASS - No matching signature
  *   VERDICT_DROP - Matched attack signature
  */
 
-/* Maximum signatures to check per packet (BPF loop limit) */
-#define MAX_SIG_CHECK  16
+/* Maximum signatures to check per packet */
+#define MAX_SIG_CHECK  8
 
 static __always_inline __u32 payload_hash_4bytes(struct packet_ctx *pkt)
 {
-    /* Hash first 4 bytes of L4 payload */
     void *payload;
 
     if (pkt->ip_proto == IPPROTO_TCP && pkt->tcp) {
@@ -44,6 +41,72 @@ static __always_inline __u32 payload_hash_4bytes(struct packet_ctx *pkt)
 
     return *(__u32 *)payload;
 }
+
+/* Single signature match check — inlined into unrolled macro calls */
+static __always_inline int sig_matches(struct attack_sig *sig,
+                                        struct packet_ctx *pkt,
+                                        __u16 src_port_h, __u16 dst_port_h,
+                                        __u32 *phash, int *phash_computed)
+{
+    /* Protocol match */
+    if (sig->protocol != 0 && sig->protocol != pkt->ip_proto)
+        return 0;
+
+    /* TCP flags match (mask-based) */
+    if (sig->flags_mask != 0) {
+        if ((pkt->tcp_flags & sig->flags_mask) != sig->flags_match)
+            return 0;
+    }
+
+    /* Source port range */
+    __u16 sp_min = bpf_ntohs(sig->src_port_min);
+    __u16 sp_max = bpf_ntohs(sig->src_port_max);
+    if (sp_min != 0 || sp_max != 0) {
+        if (src_port_h < sp_min || src_port_h > sp_max)
+            return 0;
+    }
+
+    /* Destination port range */
+    __u16 dp_min = bpf_ntohs(sig->dst_port_min);
+    __u16 dp_max = bpf_ntohs(sig->dst_port_max);
+    if (dp_min != 0 || dp_max != 0) {
+        if (dst_port_h < dp_min || dst_port_h > dp_max)
+            return 0;
+    }
+
+    /* Packet length range */
+    if (sig->pkt_len_min != 0 || sig->pkt_len_max != 0) {
+        if (pkt->pkt_len < sig->pkt_len_min ||
+            pkt->pkt_len > sig->pkt_len_max)
+            return 0;
+    }
+
+    /* Payload hash (lazy compute) */
+    if (sig->payload_hash != 0) {
+        if (!*phash_computed) {
+            *phash = payload_hash_4bytes(pkt);
+            *phash_computed = 1;
+        }
+        if (*phash != sig->payload_hash)
+            return 0;
+    }
+
+    return 1;
+}
+
+/* Macro for manual unroll: check one signature index */
+#define _CHECK_SIG(idx) do {                                                \
+    if ((idx) < count) {                                                    \
+        __u32 _k = (idx);                                                   \
+        struct attack_sig *_sig = bpf_map_lookup_elem(&attack_sig_map, &_k);\
+        if (_sig && sig_matches(_sig, pkt, src_port_h, dst_port_h,          \
+                                &phash, &phash_computed)) {                 \
+            if (stats) stats->acl_dropped++;                                \
+            emit_event(pkt, ATTACK_NONE, 1, DROP_FINGERPRINT, 0, 0);       \
+            return VERDICT_DROP;                                            \
+        }                                                                   \
+    }                                                                       \
+} while(0)
 
 static __always_inline int fingerprint_check(struct packet_ctx *pkt,
                                               struct global_stats *stats)
@@ -62,67 +125,19 @@ static __always_inline int fingerprint_check(struct packet_ctx *pkt,
     __u32 phash = 0;
     int phash_computed = 0;
 
-    #pragma unroll
-    for (__u32 i = 0; i < MAX_SIG_CHECK; i++) {
-        if (i >= count)
-            break;
-
-        struct attack_sig *sig = bpf_map_lookup_elem(&attack_sig_map, &i);
-        if (!sig)
-            continue;
-
-        /* Protocol match */
-        if (sig->protocol != 0 && sig->protocol != pkt->ip_proto)
-            continue;
-
-        /* TCP flags match (mask-based) */
-        if (sig->flags_mask != 0) {
-            if ((pkt->tcp_flags & sig->flags_mask) != sig->flags_match)
-                continue;
-        }
-
-        /* Source port range */
-        __u16 sp_min = bpf_ntohs(sig->src_port_min);
-        __u16 sp_max = bpf_ntohs(sig->src_port_max);
-        if (sp_min != 0 || sp_max != 0) {
-            if (src_port_h < sp_min || src_port_h > sp_max)
-                continue;
-        }
-
-        /* Destination port range */
-        __u16 dp_min = bpf_ntohs(sig->dst_port_min);
-        __u16 dp_max = bpf_ntohs(sig->dst_port_max);
-        if (dp_min != 0 || dp_max != 0) {
-            if (dst_port_h < dp_min || dst_port_h > dp_max)
-                continue;
-        }
-
-        /* Packet length range */
-        if (sig->pkt_len_min != 0 || sig->pkt_len_max != 0) {
-            if (pkt->pkt_len < sig->pkt_len_min ||
-                pkt->pkt_len > sig->pkt_len_max)
-                continue;
-        }
-
-        /* Payload hash (lazy compute) */
-        if (sig->payload_hash != 0) {
-            if (!phash_computed) {
-                phash = payload_hash_4bytes(pkt);
-                phash_computed = 1;
-            }
-            if (phash != sig->payload_hash)
-                continue;
-        }
-
-        /* All checks passed — signature match! */
-        if (stats)
-            stats->acl_dropped++;
-
-        emit_event(pkt, ATTACK_NONE, 1, DROP_FINGERPRINT, 0, 0);
-        return VERDICT_DROP;
-    }
+    /* Manually unrolled — no for-loop back-edge for the verifier */
+    _CHECK_SIG(0);
+    _CHECK_SIG(1);
+    _CHECK_SIG(2);
+    _CHECK_SIG(3);
+    _CHECK_SIG(4);
+    _CHECK_SIG(5);
+    _CHECK_SIG(6);
+    _CHECK_SIG(7);
 
     return VERDICT_PASS;
 }
+
+#undef _CHECK_SIG
 
 #endif /* __MOD_FINGERPRINT_H__ */
