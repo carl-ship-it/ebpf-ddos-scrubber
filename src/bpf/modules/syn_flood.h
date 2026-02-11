@@ -186,6 +186,19 @@ static __always_inline int syn_flood_check(struct xdp_md *ctx,
         iph->ttl = 64;
         iph->id = 0;
 
+        /* Re-derive tcp pointer right before writes (verifier loses range
+         * when packet pointers are spilled to stack between operations) */
+        {
+            void *d2 = (void *)(long)ctx->data;
+            void *de2 = (void *)(long)ctx->data_end;
+            __u16 toff = pkt->l4_offset;
+            if (toff > 1500)
+                return VERDICT_PASS;
+            tcp = (struct tcphdr *)(d2 + toff);
+            if ((void *)(tcp + 1) > de2)
+                return VERDICT_PASS;
+        }
+
         /* Build SYN-ACK */
         __be16 tmp_port = tcp->source;
         tcp->source = tcp->dest;
@@ -202,21 +215,40 @@ static __always_inline int syn_flood_check(struct xdp_md *ctx,
         tcp->urg = 0;
         tcp->window = bpf_htons(65535);
 
-        /* Recalculate IP checksum */
+        /* Re-derive iph for checksum (same reason) */
+        {
+            void *d3 = (void *)(long)ctx->data;
+            void *de3 = (void *)(long)ctx->data_end;
+            iph = (struct iphdr *)(d3 + sizeof(struct ethhdr));
+            if ((void *)(iph + 1) > de3)
+                return VERDICT_PASS;
+        }
+
+        /* Recalculate IP checksum (use fresh data_end from iph re-derivation) */
         iph->check = 0;
-        /* Simple IP checksum - use bpf_csum_diff if available */
         __u32 csum = 0;
         __u16 *p = (__u16 *)iph;
+        void *de_csum = (void *)(long)ctx->data_end;
         #pragma unroll
         for (int i = 0; i < 10; i++) {
-            if ((void *)(p + 1) > data_end)
+            if ((void *)(p + 1) > de_csum)
                 break;
             csum += *p;
             p++;
         }
         iph->check = csum_fold(csum);
 
-        /* Recalculate TCP checksum (simplified - zero and let NIC offload) */
+        /* Re-derive tcp for final checksum zeroing */
+        {
+            void *d4 = (void *)(long)ctx->data;
+            void *de4 = (void *)(long)ctx->data_end;
+            __u16 toff2 = pkt->l4_offset;
+            if (toff2 > 1500)
+                return VERDICT_PASS;
+            tcp = (struct tcphdr *)(d4 + toff2);
+            if ((void *)(tcp + 1) > de4)
+                return VERDICT_PASS;
+        }
         tcp->check = 0;
 
         if (stats)
