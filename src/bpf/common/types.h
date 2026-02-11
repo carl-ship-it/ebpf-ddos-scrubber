@@ -141,7 +141,7 @@
 #define NTP_MIN_LEN             48
 
 /* ===== Payload match entry ===== */
-#define PAYLOAD_PATTERN_MAX_LEN 64
+#define PAYLOAD_PATTERN_MAX_LEN 32
 #define PAYLOAD_MATCH_MAX_RULES 512
 
 /* ===== Packet context: parsed packet metadata ===== */

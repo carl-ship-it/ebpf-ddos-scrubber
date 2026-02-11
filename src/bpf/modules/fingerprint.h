@@ -23,7 +23,7 @@
  */
 
 /* Maximum signatures to check per packet (BPF loop limit) */
-#define MAX_SIG_CHECK  64
+#define MAX_SIG_CHECK  16
 
 static __always_inline __u32 payload_hash_4bytes(struct packet_ctx *pkt)
 {

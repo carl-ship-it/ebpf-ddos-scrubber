@@ -27,7 +27,7 @@
  */
 
 /* Maximum rules to check per packet (BPF verifier loop bound) */
-#define PAYLOAD_MAX_CHECK  64
+#define PAYLOAD_MAX_CHECK  16
 
 /* Rate-limit divisor for payload-flagged sources */
 #define PAYLOAD_RATE_LIMIT_DIVISOR 4
