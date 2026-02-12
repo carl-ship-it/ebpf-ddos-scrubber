@@ -203,7 +203,7 @@ func (m *MapManager) AddGRETunnel(cidr string, tunnelEndpoint net.IP) error {
 func (m *MapManager) ConntrackCount() (int, error) {
 	var (
 		key   ConntrackKey
-		value ConntrackEntry
+		value []ConntrackEntry // per-CPU slice
 		count int
 	)
 	iter := m.objs.ConntrackMap.Iterate()
@@ -216,10 +216,11 @@ func (m *MapManager) ConntrackCount() (int, error) {
 // FlushConntrack removes all entries from the conntrack map.
 func (m *MapManager) FlushConntrack() error {
 	var key ConntrackKey
+	var value []ConntrackEntry // per-CPU slice required for LRU_PERCPU_HASH
 	var keys []ConntrackKey
 
 	iter := m.objs.ConntrackMap.Iterate()
-	for iter.Next(&key, nil) {
+	for iter.Next(&key, &value) {
 		keys = append(keys, key)
 	}
 	if err := iter.Err(); err != nil {
