@@ -2,7 +2,7 @@ import React, { lazy, Suspense } from 'react';
 import { ConfigProvider, theme, Spin } from 'antd';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { darkTheme } from './styles/theme';
-import { useMockData } from './hooks/useMockData';
+import { useRealtimeConnection } from './hooks/useStats';
 import AppLayout from './components/Layout';
 
 // Eager load Dashboard (primary page)
@@ -29,8 +29,7 @@ const Loading = () => (
 );
 
 const AppInner: React.FC = () => {
-  // Use mock data for demo; replace with useRealtimeConnection() for production
-  useMockData();
+  useRealtimeConnection();
 
   return (
     <Suspense fallback={<Loading />}>

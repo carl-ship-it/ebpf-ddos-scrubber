@@ -157,6 +157,21 @@ func (m *MapManager) ReadStats() (*GlobalStats, error) {
 		agg.SYNCookiesSent += perCPU[i].SYNCookiesSent
 		agg.SYNCookiesValidated += perCPU[i].SYNCookiesValidated
 		agg.SYNCookiesFailed += perCPU[i].SYNCookiesFailed
+		agg.GeoIPDropped += perCPU[i].GeoIPDropped
+		agg.ReputationDropped += perCPU[i].ReputationDropped
+		agg.ProtoViolationDropped += perCPU[i].ProtoViolationDropped
+		agg.PayloadMatchDropped += perCPU[i].PayloadMatchDropped
+		agg.TCPStateDropped += perCPU[i].TCPStateDropped
+		agg.SSDPAmpDropped += perCPU[i].SSDPAmpDropped
+		agg.MemcachedAmpDropped += perCPU[i].MemcachedAmpDropped
+		agg.ThreatIntelDropped += perCPU[i].ThreatIntelDropped
+		agg.ReputationAutoBlocked += perCPU[i].ReputationAutoBlocked
+		agg.EscalationUpgrades += perCPU[i].EscalationUpgrades
+		agg.DNSQueriesValidated += perCPU[i].DNSQueriesValidated
+		agg.DNSQueriesBlocked += perCPU[i].DNSQueriesBlocked
+		agg.NTPMonlistBlocked += perCPU[i].NTPMonlistBlocked
+		agg.TCPStateViolations += perCPU[i].TCPStateViolations
+		agg.PortScanDetected += perCPU[i].PortScanDetected
 	}
 
 	return agg, nil

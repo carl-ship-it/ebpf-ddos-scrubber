@@ -82,6 +82,10 @@ func (e *Engine) Start(ctx context.Context) error {
 			zap.String("detail", bpf.FormatEvent(ev)),
 			zap.String("attack", bpf.AttackTypeName(ev.AttackType)),
 		)
+		// Forward events to WebSocket clients
+		if e.apiServer != nil {
+			e.apiServer.BroadcastEvent(ev)
+		}
 	})
 	go func() {
 		if err := e.eventReader.Run(ctx); err != nil {
